@@ -1,2 +1,13 @@
 # HarvesterAI
 A simple GUI tool to systematically extract data from PDFs to assist in meta-analysis and systematic reviews using AI
+
+The tool uses a structured set of questions, instructions, and example options to extract data from a large number of PDFs using AI.
+
+The tool is free, but requires your own API key. Currently, the tool supports Deepseek but other AI vendors will be added.
+
+Steps:
+1. Create a folder of PDFs. It is recommended to use Zotero and export the library
+2. Make a API key and purchase credits
+3. Fill in information about your PDF folder, Zotero library, questions, and output folder destinations.
+4. Run a test run to see if the answers are satifsfactory, then either refine your questions and repeat, or continue.
+5. Run the full extraction! 
