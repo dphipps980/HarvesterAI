@@ -3,7 +3,7 @@ A simple GUI tool to systematically extract data from PDFs to assist in meta-ana
 
 The tool uses a structured set of questions, instructions, and example options to extract data from a large number of PDFs using AI.
 
-The tool is free, but requires your own API key. API usage costs are approximately $0.70USD per 100 PDFs using the recommended DeepSeek model, or $5.00USD per 100 PDFs using OpenAI models.
+The tool is free, but requires your own API key (i.e., the program is free, but you pay your own AI computing costs). API usage costs are approximately $0.70USD per 100 PDFs using the recommended DeepSeek model, or $5.00USD per 100 PDFs using OpenAI models.
 
 Steps:
 1. Create a folder of PDFs. It is recommended to use Zotero and export the library.
