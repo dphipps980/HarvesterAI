@@ -14,3 +14,6 @@ Steps:
 2. Open the program and fill in information about your PDF folder, Zotero library, questions, and output folder destinations.
 3. Run a test run to see if the answers are satifsfactory, then either refine your questions and repeat, or continue.
 4. Run the full extraction! 
+
+
+Download: https://github.com/dphipps980/HarvesterAI/releases/tag/Beta
