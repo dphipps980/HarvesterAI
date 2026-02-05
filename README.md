@@ -17,7 +17,7 @@ Steps:
 5. Run the full extraction! 
 
 
-Download: https://github.com/dphipps980/HarvesterAI/releases/tag/Beta
+Download: https://github.com/dphipps980/HarvesterAI/releases/
 
 
 ## Usage tips
