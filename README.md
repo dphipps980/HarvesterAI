@@ -24,3 +24,6 @@ Download: https://github.com/dphipps980/HarvesterAI/releases/
 - Always do a test run before the full run.
 - Questions should be phrased assuming nothing, especially if using the tool to assist in screening. For example "If the PDF descibes an intervention, list the target mechanisms used" will be less likely to produce halluciantions than "List the mechanisms used in the intervention"
 - You can provide the tool with links in the additonal context that might help. For example "When answering this item, make your assessment using the JBI guidelines available at https://jbi.global/sites/default/files/2020-08/Checklist_for_RCTs.pdf"
+
+## Notes
+- Any data extracted by AI should always be human verified before publication. This tool can act as an assistant but AI can and does make mistakes.
