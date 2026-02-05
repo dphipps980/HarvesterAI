@@ -1,5 +1,5 @@
 # HarvesterAI
-A simple GUI tool to systematically extract data from PDFs to assist in meta-analysis and systematic reviews using AI.
+A simple tool to systematically extract data from PDFs to assist in meta-analysis and systematic reviews using AI.
 
 The tool uses a structured set of questions, instructions, and example options to extract data from a large number of PDFs using AI.
 
