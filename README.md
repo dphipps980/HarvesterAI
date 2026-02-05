@@ -9,6 +9,7 @@ Before Using:
 1. Do your title and abstract screening as you wish. For example using ASReview or Covidence.
 2. Download your list of studies you wish to extract data from (e.g., for the purpose of assisted screening or for assisting in full text extraction) and find PDFs. I recommend using Zotero or Endnote.
 3. Make a API key and purchase credits with the AI you wish to use. I use Deepseek as I have found it a good balance of cost and accuracy - https://platform.deepseek.com/  
+
 Steps:
 1. Phase your questions in the questiontemplate file. Questions may include recommended answer options (e.g., RCT, Pre-Post Intervention, Other: Insert Design Here), detailed instructions, or example answers. For simple questions these are less important, but will vastly improve the quality for complex issues. 
 2. Export your Zotero or Endnote library with PDFs to a target folder and RIS formatting.
