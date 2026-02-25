@@ -19,7 +19,8 @@ You can view a video of the tool is use here here https://drive.google.com/file/
 3. Open the program and fill in information about your PDF folder, Zotero library, questions, and output folder destinations.
 4. Run a test run to see if the answers are satifsfactory, then either refine your questions and repeat, or continue.
 5. Run the full extraction!
-6. Review the answers
+6. Review the answers. If you just want a nice AI table, you can stop here.
+   
 **Part 2: Human AI Extraction**
 1. Create a list of questions for humans to answer. These will probably be similar to the AI questions, but might be more tight in formatting. For example, if needed in a specific way for a meta-analysis
 2. Give the program a match between which AI answers should be suggestions for which human efforts.
