@@ -29,7 +29,7 @@ You can view a video of the tool is use here here https://drive.google.com/drive
 
 
 ## Download
-https://github.com/dphipps980/HarvesterAI/releases/ or https://drive.google.com/file/d/10laFoU_VbBnG64yZrbdMd3VLW4bp_nzH/view?usp=drive_link
+https://github.com/dphipps980/HarvesterAI/releases/ or [via Google Drive](https://drive.google.com/drive/folders/14znBotKXqwGK-jAPXrXTpZ10LVDfyAsX?usp=sharing)
 
 
 ## Usage tips
