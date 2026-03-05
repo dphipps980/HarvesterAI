@@ -11,7 +11,7 @@ The tool is free, but requires your own API key (i.e., the program is free, but 
 3. Make a API key and purchase credits with the AI you wish to use. 
 
 ## Steps
-You can view a video of the tool is use here here https://drive.google.com/file/d/1FH6sx-Cb-1cjqXbzBMoRH1qutk5p8lvq/view?usp=drive_link
+You can view a video of the tool is use here here https://drive.google.com/drive/folders/17XX4-sxmRRG5gMg1Xnl5BOnM2LIlBu0T?usp=drive_link
 
 **Part 1: AI Extraction**
 1. Phase your questions in the questiontemplate file. Questions may include recommended answer options (e.g., RCT, Pre-Post Intervention, Other: Insert Design Here), detailed instructions, or example answers. For simple questions these are less important, but will vastly improve the quality for complex issues. 
