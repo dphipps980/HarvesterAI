@@ -3,12 +3,12 @@ A simple tool to systematically extract data from PDFs to assist in meta-analysi
 
 The tool uses a structured set of questions, instructions, and example options to extract data from a large number of PDFs using AI, and includes a basic AI-Human collaborative data coder.
 
-The tool is free, but requires your own API key (i.e., the program is free, but you pay your own AI computing costs). API usage costs are approximately $0.70USD per 100 PDFs using the recommended DeepSeek model, or $5.00USD per 100 PDFs using OpenAI models.
+The tool is free, but requires your own API key (i.e., the program is free, but you pay your own AI computing costs). API usage costs are approximately $0.70USD per 100 PDFs using the DeepSeek model, or $5.00USD per 100 PDFs using OpenAI models.
 
 ## Before Using
 1. The tool does not feature title and abstract screening features. Do your title and abstract screening as you wish. I recommend ASReview, but Covidence, Rayyan, or just an excel file are all popular options.
 2. Download your list of studies you wish to extract data from (e.g., for the purpose of assisted screening or for assisting in full text extraction) and find PDFs. I recommend using Zotero. Endnote may also work, but I havent tested it.
-3. Make a API key and purchase credits with the AI you wish to use. 
+3. Make a API key and purchase credits with the AI you wish to use. Alternatively, you can use OpenRouter to test several models. 
 
 ## Steps
 You can view a video of the tool is use here here https://drive.google.com/drive/folders/17XX4-sxmRRG5gMg1Xnl5BOnM2LIlBu0T?usp=drive_link
@@ -25,7 +25,11 @@ You can view a video of the tool is use here here https://drive.google.com/drive
 1. Create a list of questions for humans to answer. These will probably be similar to the AI questions, but might be more tight in formatting. For example, if needed in a specific way for a meta-analysis
 2. Give the program a match between which AI answers should be suggestions for which human efforts.
 3. Enter your file and folder paths.
-4. Start a project, save it when done for a session, and reload it to resume. Done.
+4. Start a project and begin data extraction.
+
+
+## Features
+The tool now features an optional login use mode. An admin user can create and manage new users. All users can create reviews and share their project with other users. Admins can access and manage all projects. 
 
 
 ## Download
