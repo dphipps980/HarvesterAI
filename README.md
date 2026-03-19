@@ -35,6 +35,19 @@ The tool now features an optional login use mode. An admin user can create and m
 ## Download
 https://github.com/dphipps980/HarvesterAI/releases/ or [via Google Drive](https://drive.google.com/drive/folders/14znBotKXqwGK-jAPXrXTpZ10LVDfyAsX?usp=sharing)
 
+## Server Version Variables
+# AUTH_MODE
+Controls whether the server users use a full log in system, or just say their name.
+"login"         — users must log in with username + password
+"name_selector" — simple name picker, no passwords (not recommended for shared servers)
+
+# SIGNUP_MODE
+Controls whether new users can register themselves.
+"closed" — no self-registration (admin creates all accounts)
+"code"   — users can register if they have the access code below
+"open"   — anyone can create an account
+# SIGNUP_CODE
+The access code required when SIGNUP_MODE=code. Ignored otherwise. If a user has this code they can make a standard account.
 
 ## Usage tips
 - When selecting an AI, models are all quite similar. I found Deepseek a good balance of cost and accuracy - https://platform.deepseek.com/ - while I have found Anthropic's models seem less prone to hallucinations but are quite costly. Either way remember that AI can and will make mistakes. Always check AI generated suggestions before publication.
