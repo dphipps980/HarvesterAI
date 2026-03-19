@@ -12,6 +12,8 @@ services:
       - AUTH_SECRET_KEY=change-this-to-a-long-random-secret
       - INITIAL_ADMIN_USER=admin
       - INITIAL_ADMIN_PASSWORD=changeme
+      - SIGNUP_MODE=code
+      - SIGNUP_CODE=code-to-make-a-new-account-goes-here
 
 volumes:
   harvesterai_data:
