@@ -35,6 +35,15 @@ The tool now features an optional login use mode. An admin user can create and m
 ## Download
 https://github.com/dphipps980/HarvesterAI/releases/ or [via Google Drive](https://drive.google.com/drive/folders/14znBotKXqwGK-jAPXrXTpZ10LVDfyAsX?usp=sharing)
 
+
+## Usage tips
+- When selecting an AI, models are all quite similar. I found Deepseek a good balance of cost and accuracy - https://platform.deepseek.com/ - while I have found Anthropic's models seem less prone to hallucinations but are quite costly. Either way remember that AI can and will make mistakes. Always check AI generated suggestions before publication.
+- Always do a test run before the full run for AI extractions. Check for strange responses, as these often stem from some unnoticed ambiguity in the question.
+- Questions should be phrased assuming nothing, especially if using the tool to assist in screening. For example "If the PDF descibes an intervention, list the target mechanisms used" will be less likely to produce halluciantions than "List the mechanisms used in the intervention"
+- You can provide the tool with links in the additonal context that might help. For example "When answering this item, make your assessment using the JBI guidelines available at https://jbi.global/sites/default/files/2020-08/Checklist_for_RCTs.pdf"
+- Once you start a project, avoid changing settings.
+- When nominating files and folder in the Human extraction stage, use the same settings as the AI stage to reduce errors
+
 ## Server Version Variables
 **AUTH_MODE**
 Controls whether the server users use a full log in system, or just say their name.
@@ -49,14 +58,6 @@ Controls whether new users can register themselves.
 
 **SIGNUP_CODE**
 The access code required when SIGNUP_MODE=code. Ignored otherwise. If a user has this code they can make a standard account.
-
-## Usage tips
-- When selecting an AI, models are all quite similar. I found Deepseek a good balance of cost and accuracy - https://platform.deepseek.com/ - while I have found Anthropic's models seem less prone to hallucinations but are quite costly. Either way remember that AI can and will make mistakes. Always check AI generated suggestions before publication.
-- Always do a test run before the full run for AI extractions. Check for strange responses, as these often stem from some unnoticed ambiguity in the question.
-- Questions should be phrased assuming nothing, especially if using the tool to assist in screening. For example "If the PDF descibes an intervention, list the target mechanisms used" will be less likely to produce halluciantions than "List the mechanisms used in the intervention"
-- You can provide the tool with links in the additonal context that might help. For example "When answering this item, make your assessment using the JBI guidelines available at https://jbi.global/sites/default/files/2020-08/Checklist_for_RCTs.pdf"
-- Once you start a project, avoid changing settings.
-- When nominating files and folder in the Human extraction stage, use the same settings as the AI stage to reduce errors
 
 ## Notes
 ** Any data extracted by AI should always be human verified before publication. This tool can act as an assistant but AI can and does make mistakes.**
