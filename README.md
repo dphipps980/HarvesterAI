@@ -59,6 +59,10 @@ Controls whether new users can register themselves.
 **SIGNUP_CODE**
 The access code required when SIGNUP_MODE=code. Ignored otherwise. If a user has this code they can make a standard account.
 
+**PDF_LOCATION**
+Does the server allow keeping PDFs on server or not. If set to server, PDFs will be stored with the project data. If set to local, a Zotero library export can be linked, using the PDFs on each users machine to save server space. If set to ignore, PDFs are extracted by the AI and no other function to open them is presented.
+
+local | server | ignore
 ## Notes
 ** Any data extracted by AI should always be human verified before publication. This tool can act as an assistant but AI can and does make mistakes.**
 
