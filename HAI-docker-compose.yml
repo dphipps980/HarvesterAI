@@ -8,12 +8,21 @@ services:
     restart: unless-stopped
     environment:
       - HARVESTERAI_DATA_DIR=/data
-      - AUTH_MODE=login
-      - AUTH_SECRET_KEY=change-this-to-a-long-random-secret
+
+      # Authentication
+      - AUTH_MODE=login              # login | name_selector
+      - AUTH_SECRET_KEY=change-this-to-a-long-random-string
+
+      # Self-registration
+      - SIGNUP_MODE=closed           # closed | code | open
+      - SIGNUP_CODE=CHANGEME         # only used if SIGNUP_MODE=code
+
+      # PDF storage
+      - PDF_LOCATION=server           # local | server | ignore
+
+      # Initial admin account (only used on first launch)
       - INITIAL_ADMIN_USER=admin
       - INITIAL_ADMIN_PASSWORD=changeme
-      - SIGNUP_MODE=code
-      - SIGNUP_CODE=code-to-make-a-new-account-goes-here
 
 volumes:
   harvesterai_data:
