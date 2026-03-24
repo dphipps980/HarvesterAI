@@ -33,7 +33,7 @@ The tool now features an optional login use mode. An admin user can create and m
 
 
 ## Download
-https://github.com/dphipps980/HarvesterAI/releases/ or [via Google Drive](https://drive.google.com/drive/folders/14znBotKXqwGK-jAPXrXTpZ10LVDfyAsX?usp=sharing)
+The single user (exe) or server (docker) installation files can be found in the [releases tab](https://github.com/dphipps980/HarvesterAI/releases/) or [via Google Drive](https://drive.google.com/drive/folders/14znBotKXqwGK-jAPXrXTpZ10LVDfyAsX?usp=sharing). The Docker hub image cite is accessable [here](https://hub.docker.com/r/dphip/harvesterai)
 
 
 ## Usage tips
