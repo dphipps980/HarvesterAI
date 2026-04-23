@@ -1,79 +1,69 @@
-# HarvesterAI Web
+# HarvesterAI
+A simple tool to systematically extract data from PDFs to assist in meta-analysis and systematic reviews using AI.
 
-Browser-based systematic review extraction tool. PDFs are processed locally in your browser (text extracted via PDF.js) — only the extracted text is sent to the server and on to the AI API. PDF files themselves are never stored on the server.
+The tool uses a structured set of questions, instructions, and example options to extract data from a large number of PDFs using AI, and includes a basic AI-Human collaborative data coder.
+
+The tool is free, but requires your own API key (i.e., the program is free, but you pay your own AI computing costs). API usage costs are approximately $0.70USD per 100 PDFs using the DeepSeek model, or $5.00USD per 100 PDFs using OpenAI models.
+
+## Before Using
+1. The tool does not feature title and abstract screening features. Do your title and abstract screening as you wish. I recommend ASReview, but Covidence, Rayyan, or just an excel file are all popular options.
+2. Download your list of studies you wish to extract data from (e.g., for the purpose of assisted screening or for assisting in full text extraction) and find PDFs. I recommend using Zotero. Endnote may also work, but I havent tested it.
+3. Make a API key and purchase credits with the AI you wish to use. Alternatively, you can use OpenRouter to test several models. 
+
+## Steps
+You can view a video of the tool is use here here https://drive.google.com/drive/folders/17XX4-sxmRRG5gMg1Xnl5BOnM2LIlBu0T?usp=drive_link
+
+**Part 1: AI Extraction**
+1. Phase your questions in the questiontemplate file. Questions may include recommended answer options (e.g., RCT, Pre-Post Intervention, Other: Insert Design Here), detailed instructions, or example answers. For simple questions these are less important, but will vastly improve the quality for complex issues. 
+2. Export your Zotero or Endnote library with PDFs to a target folder and RIS formatting.
+3. Open the program and fill in information about your PDF folder, Zotero library, questions, and output folder destinations.
+4. Run a test run to see if the answers are satifsfactory, then either refine your questions and repeat, or continue.
+5. Run the full extraction!
+6. Review the answers. If you just want a nice AI table, you can stop here.
+   
+**Part 2: Human AI Extraction**
+1. Create a list of questions for humans to answer. These will probably be similar to the AI questions, but might be more tight in formatting. For example, if needed in a specific way for a meta-analysis
+2. Give the program a match between which AI answers should be suggestions for which human efforts.
+3. Enter your file and folder paths.
+4. Start a project and begin data extraction.
+
 
 ## Features
+The tool now features an optional login use mode. An admin user can create and manage new users. All users can create reviews and share their project with other users. Admins can access and manage all projects. 
 
-- **Client-side PDF extraction** — PDFs never leave your machine
-- **Shared job history** — team members can see all jobs and download results
-- **Live log streaming** — watch extraction progress in real time via SSE
-- **Multi-provider** — DeepSeek, OpenAI, Anthropic
-- **Resume-friendly** — each job stores its results on the server
-- **No login required** — suitable for a trusted team on a private server
 
-## Setup
+## Download
+The single user (exe) or server (docker) installation files can be found in the [releases tab](https://github.com/dphipps980/HarvesterAI/releases/) or [via Google Drive](https://drive.google.com/drive/folders/14znBotKXqwGK-jAPXrXTpZ10LVDfyAsX?usp=sharing). The Docker hub image cite is accessable [here](https://hub.docker.com/r/dphip/harvesterai)
 
-```bash
-chmod +x run.sh
-./run.sh
-```
 
-Then open `http://your-server:8000` in a browser.
+## Usage tips
+- When selecting an AI, models are all quite similar. I found Deepseek a good balance of cost and accuracy - https://platform.deepseek.com/ - while I have found Anthropic's models seem less prone to hallucinations but are quite costly. Either way remember that AI can and will make mistakes. Always check AI generated suggestions before publication.
+- Always do a test run before the full run for AI extractions. Check for strange responses, as these often stem from some unnoticed ambiguity in the question.
+- Questions should be phrased assuming nothing, especially if using the tool to assist in screening. For example "If the PDF descibes an intervention, list the target mechanisms used" will be less likely to produce halluciantions than "List the mechanisms used in the intervention"
+- You can provide the tool with links in the additonal context that might help. For example "When answering this item, make your assessment using the JBI guidelines available at https://jbi.global/sites/default/files/2020-08/Checklist_for_RCTs.pdf"
+- Once you start a project, avoid changing settings.
+- When nominating files and folder in the Human extraction stage, use the same settings as the AI stage to reduce errors
 
-## Running behind Nginx (recommended)
+## Server Version Variables
+**AUTH_MODE**
+Controls whether the server users use a full log in system, or just say their name.
+"login"         — users must log in with username + password
+"name_selector" — simple name picker, no passwords (not recommended for shared servers)
 
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com;
+**SIGNUP_MODE**
+Controls whether new users can register themselves.
+"closed" — no self-registration (admin creates all accounts)
+"code"   — users can register if they have the access code below
+"open"   — anyone can create an account
 
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_buffering off;          # Critical for SSE log streaming
-        proxy_read_timeout 3600s;     # Long timeout for large jobs
-        client_max_body_size 200M;    # For large PDF text payloads
-    }
-}
-```
+**SIGNUP_CODE**
+The access code required when SIGNUP_MODE=code. Ignored otherwise. If a user has this code they can make a standard account.
 
-## Running as a systemd service
+**PDF_LOCATION**
+Does the server allow keeping PDFs on server or not. If set to server, PDFs will be stored with the project data. If set to local, a Zotero library export can be linked, using the PDFs on each users machine to save server space. If set to ignore, PDFs are extracted by the AI and no other function to open them is presented.
 
-```ini
-# /etc/systemd/system/harvesterai.service
-[Unit]
-Description=HarvesterAI Web
-After=network.target
-
-[Service]
-Type=simple
-User=youruser
-WorkingDirectory=/path/to/harvesterai-web
-ExecStart=/path/to/harvesterai-web/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --workers 1
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now harvesterai
-```
-
-## Questions Excel format
-
-Same format as the desktop version:
-
-| # | Question | Qname | Recommended Answer Options | Additional Instructions | Example Answer 1 | … |
-|---|----------|-------|---------------------------|------------------------|------------------|---|
-
+local | server | ignore
 ## Notes
+** Any data extracted by AI should always be human verified before publication. This tool can act as an assistant but AI can and does make mistakes.**
 
-- Use `--workers 1` with uvicorn — the in-memory SSE fan-out and job context store are not multi-process safe. If you need multiple workers, replace the in-memory structures with Redis.
-- API keys are stored in SQLite (in the job config) — ensure the server is on a trusted network or behind auth if this is a concern.
-- Results are stored in `results/{job_id}/` and persist until you delete the job.
+This project is free and developed as a hobby project/side adventure. If anything malfunctions feel free to leave feedback.
