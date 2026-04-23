@@ -1,0 +1,17 @@
+services:
+  harvesterai:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - harvesterai_data:/data
+    restart: unless-stopped
+    environment:
+      - HARVESTERAI_DATA_DIR=/data
+      - AUTH_MODE=login
+      - AUTH_SECRET_KEY=change-this-to-a-long-random-secret
+      - INITIAL_ADMIN_USER=admin
+      - INITIAL_ADMIN_PASSWORD=changeme
+
+volumes:
+  harvesterai_data:

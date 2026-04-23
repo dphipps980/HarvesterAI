@@ -1,0 +1,19 @@
+services:
+  harvesterai:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - harvesterai_data:/data
+    restart: "no"
+    environment:
+      - HARVESTERAI_DATA_DIR=/data
+      - AUTH_MODE=login
+      - AUTH_SECRET_KEY=devsecretkey
+      - SIGNUP_MODE=open
+      - PDF_LOCATION=local
+      - INITIAL_ADMIN_USER=admin
+      - INITIAL_ADMIN_PASSWORD=1234
+
+volumes:
+  harvesterai_data:
