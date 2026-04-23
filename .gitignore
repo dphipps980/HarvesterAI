@@ -11,4 +11,3 @@ _backup*/
 .env
 .claude/
 docker-compose-dev.yml
-README.md
