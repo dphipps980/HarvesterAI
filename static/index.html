@@ -199,6 +199,9 @@ hr.info-div{border:none;border-top:1px solid var(--border)}
 .hf-paper-list{flex:1;overflow-y:auto;padding:6px}
 .hf-search{width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px;margin-top:6px;outline:none}
 .hf-search:focus{border-color:var(--accent)}
+.hf-filter-row{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.hf-filter-select{width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px;outline:none}
+.hf-filter-select:focus{border-color:var(--accent)}
 .hf-right{flex:1;display:flex;flex-direction:column;overflow:hidden}
 .hf-paper-header{padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:10px}
 .hf-form-area{flex:1;overflow-y:auto;padding:16px 20px 40px}
@@ -307,9 +310,12 @@ hr.info-div{border:none;border-top:1px solid var(--border)}
 .subheading-block{font-size:13px;font-weight:600;color:var(--accent2);margin-bottom:4px;padding-bottom:6px;border-bottom:1px solid var(--border)}
 
 /* Autosave indicator */
-.autosave{font-size:10px;font-family:var(--mono);color:var(--dim);margin-left:auto;transition:color .3s}
+.autosave-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:2px;margin-left:auto}
+.autosave{font-size:10px;font-family:var(--mono);color:var(--dim);transition:color .3s}
 .autosave.saving{color:var(--yellow)}
 .autosave.saved{color:var(--green)}
+.autosave.error{color:var(--red)}
+.autosave-detail{font-size:10px;color:var(--red);max-width:320px;text-align:right;line-height:1.35;display:none}
 
 /* ── Paper lock banner ── */
 #hf-lock-banner{display:none;align-items:center;gap:10px;padding:7px 14px;background:rgba(255,180,0,.13);border-bottom:1px solid rgba(255,180,0,.3);font-size:12px;color:var(--yellow)}
@@ -815,7 +821,10 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
   <div class="panel-header">
     <button class="btn btn-ghost btn-sm" onclick="closeHumanForm()">← Back</button>
     <div class="panel-title" id="hf-run-title">—</div>
-    <div class="autosave" id="autosave-ind">●&nbsp;saved</div>
+    <div class="autosave-wrap">
+      <div class="autosave" id="autosave-ind">●&nbsp;saved</div>
+      <div class="autosave-detail" id="autosave-detail"></div>
+    </div>
     <button class="btn btn-ghost btn-sm" onclick="refreshHumanForm()" title="Re-fetch questions and AI answers">↻ Refresh</button>
   </div>
   <div id="hf-lock-banner">
@@ -826,7 +835,16 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
     <div class="hf-left">
       <div class="hf-left-header">
         <div style="font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.7px">Papers</div>
-        <input id="hf-search" class="hf-search" type="search" placeholder="Search…" oninput="filterHumanPapers()">
+        <div class="hf-filter-row">
+          <select id="hf-status-filter" class="hf-filter-select" onchange="filterHumanPapers()">
+            <option value="">All decisions</option>
+            <option value="done">Done</option>
+            <option value="needs_review">Needs Review</option>
+            <option value="incomplete">Incomplete</option>
+            <option value="__none__">No decision</option>
+          </select>
+          <input id="hf-search" class="hf-search" type="search" placeholder="Search…" oninput="filterHumanPapers()">
+        </div>
       </div>
       <div class="hf-paper-list" id="hf-paper-list"></div>
     </div>
@@ -2118,12 +2136,17 @@ async function loadHumanPapers() {
 
 function filterHumanPapers() {
   const q = (document.getElementById('hf-search')?.value || '').toLowerCase().trim();
-  if(!q) { renderHumanPaperList(hfPapers); return; }
-  const filtered = hfPapers.filter(p =>
-    (p.title||'').toLowerCase().includes(q) ||
-    (p.authors||'').toLowerCase().includes(q) ||
-    p.pdf_filename.toLowerCase().includes(q)
-  );
+  const statusFilter = document.getElementById('hf-status-filter')?.value || '';
+  const filtered = hfPapers.filter(p => {
+    const matchesSearch = !q ||
+      (p.title||'').toLowerCase().includes(q) ||
+      (p.authors||'').toLowerCase().includes(q) ||
+      p.pdf_filename.toLowerCase().includes(q);
+    const status = p.paper_status || '';
+    const matchesStatus = !statusFilter ||
+      (statusFilter === '__none__' ? !status : status === statusFilter);
+    return matchesSearch && matchesStatus;
+  });
   renderHumanPaperList(filtered);
 }
 
@@ -3201,6 +3224,19 @@ function flushPendingSaves() {
     if(saveTimers[fi]) { clearTimeout(saveTimers[fi]); delete saveTimers[fi]; saveFieldNow(fi); }
   });
 }
+async function parseSaveError(res) {
+  let detail = '';
+  const contentType = res.headers.get('content-type') || '';
+  if(contentType.includes('application/json')) {
+    const data = await res.json().catch(() => ({}));
+    detail = data.detail || data.message || '';
+  } else {
+    detail = await res.text().catch(() => '');
+  }
+  detail = (detail || '').toString().trim();
+  if(!detail) detail = `Save failed (HTTP ${res.status})`;
+  return detail;
+}
 function saveFieldNow(fi, pdf, runId, fields) {
   pdf = pdf || hfCurrentPdf; runId = runId || hfRunId; fields = fields || hfFields;
   if(!pdf||!runId) return;
@@ -3216,21 +3252,40 @@ function saveFieldNow(fi, pdf, runId, fields) {
     answer,
     coder: currentUser || ''
   });
-  fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive: true })
+  const sendSave = () => fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body,
+    keepalive: true
+  }).then(async (res) => {
+    if(res.ok) return res;
+    const errText = await parseSaveError(res);
+    throw new Error(errText);
+  });
+  sendSave()
     .then(()=>{ setAutosave('saved'); })
-    .catch(()=>{
+    .catch((err)=>{
       setAutosave('saving');
       setTimeout(()=>{
-        fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive: true })
+        sendSave()
           .then(()=>{ setAutosave('saved'); })
-          .catch(()=>{ setAutosave('error'); console.error('Save failed for field', fi, 'paper', pdf); });
+          .catch((retryErr)=>{
+            setAutosave('error', retryErr?.message || err?.message || 'Save failed');
+            console.error('Save failed for field', fi, 'paper', pdf, retryErr || err);
+          });
       }, 3000);
     });
 }
-function setAutosave(state){
+function setAutosave(state, detail=''){
   const el=document.getElementById('autosave-ind');
+  const detailEl=document.getElementById('autosave-detail');
   el.className='autosave'+(state?' '+state:'');
   el.textContent = state==='saving'?'● saving…':state==='saved'?'● saved':state==='error'?'⚠ save failed':'';
+  if(detailEl){
+    const message = (detail || '').trim();
+    detailEl.textContent = state==='error' ? message : '';
+    detailEl.style.display = state==='error' && message ? 'block' : 'none';
+  }
 }
 
 // ── Paper locking ──
