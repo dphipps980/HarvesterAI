@@ -31,7 +31,7 @@ from database import (
     project_backup, project_restore,
     project_member_add, project_member_remove, project_member_set_role,
     project_members_list, get_project_role, project_list_for_user,
-    run_create, run_get, run_list, run_delete, run_finish, run_update_ai_ref,
+    run_create, run_get, run_list, run_delete, run_finish, run_update_ai_ref, run_append_log,
     ai_results_for_pdf, ai_results_for_pdf_by_bib, ai_results_for_export,
     human_result_save, human_results_for_pdf, human_results_progress,
     human_paper_statuses, human_paper_statuses_by_coder, get_paper_status, human_results_for_export,
@@ -757,18 +757,47 @@ class AnswerSave(BaseModel):
     answer: str  # JSON-encoded value
     coder: str = ""
 
+
+def _shorten_for_log(value, limit: int = 240) -> str:
+    text = "" if value is None else str(value).replace("\n", "\\n")
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _log_human_save_failure(run_id: str, pdf_filename: str, save_kind: str, payload: dict, reason: str):
+    field_index = payload.get("field_index", -1)
+    coder = payload.get("coder", "") or "(unknown)"
+    qname = payload.get("qname", "") or payload.get("question_text", "") or save_kind
+    answer_preview = _shorten_for_log(payload.get("answer", payload.get("status", "")))
+    line = (
+        f"ERROR: Human {save_kind} save failed | paper={pdf_filename} | field={field_index} | "
+        f"coder={coder} | qname={_shorten_for_log(qname, 120)} | answer={answer_preview} | reason={reason}"
+    )
+    try:
+        run_append_log(run_id, line)
+    except Exception:
+        logger.exception("Failed to append human save failure log for run %s", run_id)
+
 @app.post("/api/runs/{run_id}/human/paper/{pdf_filename:path}/answer")
 def save_answer(run_id: str, pdf_filename: str, body: AnswerSave):
     run = run_get(run_id)
     if not run: raise HTTPException(404)
-    proj = project_get(run["project_id"])
-    if proj and proj.get("audit_log_enabled"):
-        old = human_results_for_pdf(run_id, pdf_filename).get(body.field_index, "")
-        audit_log_append(run["project_id"], run_id, pdf_filename,
-                         body.field_index, body.qname, old, body.answer, body.coder)
-    human_result_save(run_id, run["project_id"], pdf_filename,
-                      body.field_index, body.qname, body.question_text, body.answer, body.coder)
-    return {"saved": True}
+    payload = body.model_dump()
+    try:
+        proj = project_get(run["project_id"])
+        if proj and proj.get("audit_log_enabled"):
+            old = human_results_for_pdf(run_id, pdf_filename).get(body.field_index, "")
+            audit_log_append(run["project_id"], run_id, pdf_filename,
+                             body.field_index, body.qname, old, body.answer, body.coder)
+        human_result_save(run_id, run["project_id"], pdf_filename,
+                          body.field_index, body.qname, body.question_text, body.answer, body.coder)
+        return {"saved": True}
+    except HTTPException as exc:
+        _log_human_save_failure(run_id, pdf_filename, "answer", payload, str(exc.detail))
+        raise
+    except Exception:
+        logger.exception("Failed to save human answer for run=%s paper=%s field=%s", run_id, pdf_filename, body.field_index)
+        _log_human_save_failure(run_id, pdf_filename, "answer", payload, "server error")
+        raise HTTPException(500, "Server error while saving answer")
 
 class StatusSave(BaseModel):
     status: str  # 'done' | 'needs_review' | 'incomplete' | ''
@@ -778,14 +807,23 @@ class StatusSave(BaseModel):
 def save_paper_status(run_id: str, pdf_filename: str, body: StatusSave):
     run = run_get(run_id)
     if not run: raise HTTPException(404)
-    proj = project_get(run["project_id"])
-    if proj and proj.get("audit_log_enabled"):
-        old = get_paper_status(run_id, pdf_filename)
-        audit_log_append(run["project_id"], run_id, pdf_filename,
-                         -1, "_status", old, body.status, body.coder)
-    human_result_save(run_id, run["project_id"], pdf_filename,
-                      -1, "_status", "", body.status, body.coder)
-    return {"saved": True}
+    payload = body.model_dump()
+    try:
+        proj = project_get(run["project_id"])
+        if proj and proj.get("audit_log_enabled"):
+            old = get_paper_status(run_id, pdf_filename)
+            audit_log_append(run["project_id"], run_id, pdf_filename,
+                             -1, "_status", old, body.status, body.coder)
+        human_result_save(run_id, run["project_id"], pdf_filename,
+                          -1, "_status", "", body.status, body.coder)
+        return {"saved": True}
+    except HTTPException as exc:
+        _log_human_save_failure(run_id, pdf_filename, "status", payload, str(exc.detail))
+        raise
+    except Exception:
+        logger.exception("Failed to save human paper status for run=%s paper=%s", run_id, pdf_filename)
+        _log_human_save_failure(run_id, pdf_filename, "status", payload, "server error")
+        raise HTTPException(500, "Server error while saving paper status")
 
 class LockAcquire(BaseModel):
     coder: str = ""
