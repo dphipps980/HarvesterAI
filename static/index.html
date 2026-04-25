@@ -2554,8 +2554,8 @@ function mcSelect(el, fi, qt) {
   saveFieldNow(fi);
 }
 function getFieldValue(fi) {
-  // Try MC
-  const mcArea = document.querySelector(`.mc-options [data-fi="${fi}"].selected`);
+  // Try MC (exclude outcome-specific MC elements which have data-poutcome/data-soutcome)
+  const mcArea = document.querySelector(`.mc-options [data-fi="${fi}"].selected:not([data-poutcome]):not([data-soutcome])`);
   if(mcArea) {
     if(mcArea.dataset.opt==='__other__'){
       const oi=document.getElementById(`mc-other-${fi}`);
@@ -2598,7 +2598,15 @@ function getFieldValue(fi) {
       const result = {};
       oids.forEach(oid=>{
         const mcSel = document.querySelector(`[data-fi="${fi}"][data-${attr}="${oid}"][data-type="${mcType}"].selected`);
-        if(mcSel){ result[oid]=mcSel.dataset.opt; return; }
+        if(mcSel){
+          if(mcSel.dataset.opt==='__other__'){
+            const oi=document.getElementById(`xo-mc-other-${fi}-${oid}`);
+            result[oid]=oi?oi.value:'';
+          } else {
+            result[oid]=mcSel.dataset.opt;
+          }
+          return;
+        }
         const manyChecks = document.querySelectorAll(`[data-fi="${fi}"][data-${attr}="${oid}"][data-type="${manyType}"]`);
         if(manyChecks.length){ result[oid]=[...manyChecks].filter(c=>c.checked).map(c=>c.dataset.val); return; }
         const naBox = document.querySelector(`[data-fi="${fi}"][data-${attr}="${oid}"][data-type="${naType}"]`);
@@ -3068,10 +3076,14 @@ function renderXOField(f, outcome, attr, pfx) {
   } else if(baseType==='MC'||baseType==='MC_WithOther') {
     const opts = f.answer_options||[];
     let selectedOpt = typeof saved==='string' ? saved : '';
+    let otherVal = '';
+    if(baseType==='MC_WithOther' && selectedOpt && !opts.includes(selectedOpt)){ otherVal=selectedOpt; selectedOpt='__other__'; }
     inputHtml = `<div class="mc-options">
       ${opts.map(o2=>`<div class="mc-opt ${selectedOpt===o2?'selected':''}" data-fi="${fi}" data-${attr}="${oid}" data-type="${pfx}_mc" data-opt="${esc(o2)}" onclick="xoMcSelect(this,'${fi}','${oid}','${attr}','${pfx}')">${esc(o2)}</div>`).join('')}
-      ${baseType==='MC_WithOther'?`<div class="mc-opt" data-fi="${fi}" data-${attr}="${oid}" data-type="${pfx}_mc" data-opt="__other__" onclick="xoMcSelect(this,'${fi}','${oid}','${attr}','${pfx}')">Other…</div>`:''}
-    </div>`;
+      ${baseType==='MC_WithOther'?`<div class="mc-opt ${selectedOpt==='__other__'?'selected':''}" data-fi="${fi}" data-${attr}="${oid}" data-type="${pfx}_mc" data-opt="__other__" onclick="xoMcSelect(this,'${fi}','${oid}','${attr}','${pfx}')">Other…</div>`:''}
+    </div>
+    ${baseType==='MC_WithOther'?`<input class="mc-other-inp" id="xo-mc-other-${fi}-${oid}" type="text" placeholder="Specify other…" value="${esc(otherVal)}" style="${selectedOpt==='__other__'?'':'display:none'}" data-fi="${fi}" data-${attr}="${oid}" data-type="${pfx}_text_other" oninput="saveFieldDebounced('${fi}')">`:''}
+    `;
   } else if(baseType==='ManySelect') {
     const opts = f.answer_options||[];
     const sel = Array.isArray(saved)?saved:(saved?[saved]:[]);
@@ -3104,6 +3116,8 @@ function xoMcSelect(el, fi, oid, attr, pfx) {
   const parent = el.parentElement;
   parent.querySelectorAll('.mc-opt').forEach(o=>o.classList.remove('selected'));
   el.classList.add('selected');
+  const otherInp = document.getElementById(`xo-mc-other-${fi}-${oid}`);
+  if(otherInp) otherInp.style.display = el.dataset.opt==='__other__'?'':'none';
   saveFieldNow(fi);
 }
 function xoManyChange(fi, oid, attr, pfx) {
@@ -3241,6 +3255,7 @@ async function parseSaveError(res) {
   if(!detail) detail = `Save failed (HTTP ${res.status})`;
   return detail;
 }
+const _saveSeq = {};
 function saveFieldNow(fi, pdf, runId, fields) {
   pdf = pdf || hfCurrentPdf; runId = runId || hfRunId; fields = fields || hfFields;
   if(!pdf||!runId) return;
@@ -3248,6 +3263,8 @@ function saveFieldNow(fi, pdf, runId, fields) {
   if(answer===undefined) return;
   const field = (fields||[]).find(f=>f.field_index==fi)||{};
   hfHumanAnswers[fi] = answer;
+  _saveSeq[fi] = (_saveSeq[fi] || 0) + 1;
+  const seq = _saveSeq[fi];
   const url = `${API}/runs/${runId}/human/paper/${encodeURIComponent(pdf)}/answer`;
   const body = JSON.stringify({
     field_index: parseInt(fi),
@@ -3271,6 +3288,7 @@ function saveFieldNow(fi, pdf, runId, fields) {
     .catch((err)=>{
       setAutosave('saving');
       setTimeout(()=>{
+        if(_saveSeq[fi] !== seq) return; // newer save supersedes this retry
         sendSave()
           .then(()=>{ setAutosave('saved'); })
           .catch((retryErr)=>{
