@@ -2253,6 +2253,8 @@ function switchFormTab(tabName) {
 
 function renderFormPane() {
   const area = document.getElementById('hf-form-area');
+  // Preserve debounced edits before replacing the current form DOM.
+  flushPendingSaves();
   if(!hfCurrentPdf){area.innerHTML='<div class="empty">Select a paper</div>';return;}
   const fields = hfFields.filter(f=>f.tab===hfActiveTab);
   const bgFields = fields.filter(f=>f.qtype&&f.qtype.startsWith('BG_'));
@@ -2995,6 +2997,7 @@ function removeBGPill(fi, gid, val) {
 function bgNaChanged(fi, gid, cb) {
   const textInp = document.querySelector(`[data-fi="${fi}"][data-group="${gid}"][data-type="bg_text"]`);
   if(textInp){textInp.disabled=cb.checked; if(cb.checked) textInp.value='';}
+  saveFieldNow(fi);
 }
 
 // ── xPO_ / xSO_ outcome blocks (shared renderer) ──
@@ -3119,6 +3122,7 @@ function xoNaChanged(fi, oid, attr, cb) {
   const pfx = attr==='poutcome'?'po':'so';
   const textInp = document.querySelector(`[data-fi="${fi}"][data-${attr}="${oid}"][data-type="${pfx}_text"]`);
   if(textInp){textInp.disabled=cb.checked; if(cb.checked) textInp.value='';}
+  saveFieldNow(fi);
 }
 function getXOGMeansValue(fi, oid, attr) {
   const pfx = attr==='poutcome'?'po':'so';
