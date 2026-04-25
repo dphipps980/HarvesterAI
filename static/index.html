@@ -2589,8 +2589,8 @@ function getFieldValue(fi) {
   if(sosWidget) return getSOSpecValue(fi);
   // xPO_ / xSO_ fields — check by data-poutcome or data-soutcome
   for(const [attr, gmeansPfx, mcType, manyType, naType, textType] of [
-    ['poutcome','po-gmeans-tbl','xpo_mc','xpo_many','xpo_na','xpo_text'],
-    ['soutcome','so-gmeans-tbl','xso_mc','xso_many','xso_na','xso_text'],
+    ['poutcome','po-gmeans-tbl','po_mc','po_many','po_na','po_text'],
+    ['soutcome','so-gmeans-tbl','so_mc','so_many','so_na','so_text'],
   ]) {
     const outcomeEls = document.querySelectorAll(`[data-fi="${fi}"][data-${attr}]`);
     if(outcomeEls.length) {
@@ -3225,7 +3225,7 @@ function fieldChanged(e) {
   if(!fi) return;
   // manyChange / bgManyChange already call saveFieldNow directly — skip debounce to avoid double-save
   const t = e.target.dataset.type;
-  if(t === 'many' || t === 'bg_many' || t === 'xpo_many' || t === 'xso_many') return;
+  if(t === 'many' || t === 'bg_many' || t === 'po_many' || t === 'so_many') return;
   saveFieldDebounced(fi);
 }
 
