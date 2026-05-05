@@ -801,6 +801,13 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           </div>
         </div>
 
+        <div class="proj-admin-only" style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:18px 20px">
+          <div style="font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:14px">Runs</div>
+          <div id="manage-run-list" style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:13px;color:var(--dim)">No runs</div>
+          </div>
+        </div>
+
         <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:18px 20px">
           <div style="font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Danger Zone</div>
           <div style="font-size:12px;color:var(--dim);margin-bottom:14px">These actions are permanent and cannot be undone.</div>
@@ -1362,6 +1369,7 @@ function switchTab(name) {
   if(name==='ai') loadAIRuns();
   if(name==='human') loadHumanRuns();
   if(name==='results') loadResults();
+  if(name==='manage') loadManageRuns();
 }
 
 async function clearProjectPdfs() {
@@ -1369,6 +1377,45 @@ async function clearProjectPdfs() {
   const r = await fetch(`${API}/projects/${currentProjId}/pdfs`, {method: 'DELETE'});
   if (r.ok) alert('PDFs cleared.');
   else { const e = await r.json(); alert('Failed: ' + (e.detail || 'unknown error')); }
+}
+
+async function loadManageRuns() {
+  if (!currentProjId) return;
+  const r = await fetch(`${API}/projects/${currentProjId}/runs`);
+  const runs = await r.json();
+  renderManageRunList(runs);
+}
+
+function renderManageRunList(runs) {
+  const el = document.getElementById('manage-run-list');
+  if (!el) return;
+  if (!runs.length) { el.innerHTML = '<div style="font-size:13px;color:var(--dim)">No runs</div>'; return; }
+  const sorted = [...runs].sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+  el.innerHTML = sorted.map(r => `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--s1);border:1px solid var(--border);border-radius:7px">
+      <span class="dot dot-${r.status}"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:1px">${r.type.toUpperCase()} · ${r.completed_count}/${r.pdf_count} papers · ${relTime(r.created_at)}</div>
+      </div>
+      <span class="badge badge-${r.status}">${r.status}</span>
+      <button class="btn btn-ghost btn-sm" style="color:var(--red);flex-shrink:0" onclick="deleteRunFromManage('${r.id}',event)" title="Delete run">🗑</button>
+    </div>`).join('');
+}
+
+async function deleteRunFromManage(runId, event) {
+  event.stopPropagation();
+  if (!confirm('Delete this run and all its results? This cannot be undone.')) return;
+  const r = await fetch(`${API}/runs/${runId}`, {method: 'DELETE'});
+  if (!r.ok) { const e = await r.json(); alert('Failed: ' + (e.detail || 'unknown error')); return; }
+  if (currentRunId === runId) {
+    currentRunId = null;
+    document.getElementById('ai-run-detail').style.display = 'none';
+  }
+  await loadManageRuns();
+  loadAIRuns();
+  loadHumanRuns();
+  loadProjects();
 }
 
 // ══════════════════════════════════════════════════════════
