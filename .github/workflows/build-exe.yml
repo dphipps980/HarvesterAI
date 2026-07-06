@@ -29,11 +29,15 @@ jobs:
       - name: Build EXE
         run: pyinstaller harvesterai.spec
 
+      - name: Rename EXE for clarity
+        shell: bash
+        run: mv dist/HarvesterAI.exe "dist/HarvesterAI_WindowsSingleUser.exe"
+
       - name: Upload EXE and compose template to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/HarvesterAI.exe
+            dist/HarvesterAI_WindowsSingleUser.exe
             docker-compose.yml
           name: HarvesterAI ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
