@@ -435,7 +435,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
     <div class="mark"><img src="/favicon.ico" style="width:20px;height:20px;object-fit:contain"></div>
     <div class="sidebar-logo-text" style="flex:1">
       <div class="title">HarvesterAI</div>
-      <div class="version">v0.2.5</div>
+      <div class="version">v0.2.6</div>
     </div>
   </div>
   <div class="sidebar-controls">
@@ -1067,7 +1067,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           <img src="/favicon.ico" style="width:36px;height:36px;object-fit:contain">
         </div>
         <div style="font-size:18px;font-weight:700;letter-spacing:.3px">HarvesterAI</div>
-        <div style="font-size:11px;color:var(--dim);font-family:var(--mono)">v0.2.5</div>
+        <div style="font-size:11px;color:var(--dim);font-family:var(--mono)">v0.2.6</div>
       </div>
       <div class="modal-sec">
         <div class="modal-sec-title">About</div>
@@ -1076,7 +1076,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
       </div>
       <div class="modal-sec">
         <div class="modal-sec-title">Citation</div>
-        <div style="font-size:12px;line-height:1.7;background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-family:var(--mono)">Phipps, D. (2026). HarvesterAI (Version 0.2.5) [Computer software]. <a class="modal-link" href="https://github.com/dphipps980/HarvesterAI" target="_blank">https://github.com/dphipps980/HarvesterAI</a></div>
+        <div style="font-size:12px;line-height:1.7;background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-family:var(--mono)">Phipps, D. (2026). HarvesterAI (Version 0.2.6) [Computer software]. <a class="modal-link" href="https://github.com/dphipps980/HarvesterAI" target="_blank">https://github.com/dphipps980/HarvesterAI</a></div>
       </div>
       <div class="modal-sec">
         <div class="modal-sec-title">Steps to Use</div>
@@ -1132,11 +1132,25 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
               <div class="dz-sub" id="dz-ris-label">Not uploaded</div>
             </div>
           </div>
+          <div class="form-group">
+            <label>Extra Context — optional <span style="font-size:10px;color:var(--dim);font-weight:400">(codebooks, guides…)</span></label>
+            <div class="drop-zone" id="dz-ctx">
+              <input type="file" accept=".txt,.md,.pdf,.csv" onchange="uploadFile('extra_context',this)">
+              <div class="dz-icon">📎</div>
+              <div class="dz-label">Drop or click</div>
+              <div class="dz-sub" id="dz-ctx-label">Not uploaded</div>
+            </div>
+          </div>
         </div>
       </div>
       <!-- AI Model -->
       <div class="modal-sec">
         <div class="modal-sec-title">AI Model</div>
+        <div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:14px">
+          <div class="aicfg-tab active" data-pane="basic" onclick="switchAiCfgTab('basic')" style="padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;border-bottom:2px solid var(--accent);color:var(--accent)">Basic</div>
+          <div class="aicfg-tab" data-pane="json" onclick="switchAiCfgTab('json')" style="padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;color:var(--dim)">JSON Mode</div>
+        </div>
+        <div id="aicfg-pane-basic">
         <div class="form-row">
           <div class="form-group">
             <label>Provider <i class="tip-icon" data-tip-key="provider">ⓘ</i></label>
@@ -1185,6 +1199,32 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
         <div class="form-group" style="margin-bottom:14px">
           <label>System Context <i class="tip-icon" data-tip-key="system-context">ⓘ</i></label>
           <textarea id="cfg-syscontext" rows="3"></textarea>
+        </div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:7px">
+          ⓘ Providers occasionally change their API request format. If AI runs start failing consistently, check your target model's API documentation, then try the <strong>JSON Mode</strong> tab to edit the raw request directly.
+        </div>
+        </div>
+        <div id="aicfg-pane-json" style="display:none">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <input type="checkbox" id="cfg-raw-mode" style="width:auto;accent-color:var(--accent)">
+            <label for="cfg-raw-mode" style="margin:0;font-size:12px;cursor:pointer;font-weight:500">
+              Use this raw request template instead of the Basic settings
+            </label>
+          </div>
+          <div style="font-size:11px;color:var(--dim);line-height:1.7;margin-bottom:8px;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:7px">
+            <div style="margin-bottom:6px">Edit the raw HTTP request sent to the AI API. Useful if a provider changes their request format. The response is still parsed for <code style="background:var(--s3);padding:1px 4px;border-radius:3px">[[N]]</code> answers, so your prompt must still ask for that format (it's included in <code style="background:var(--s3);padding:1px 4px;border-radius:3px">{{PROMPT}}</code>).</div>
+            <div style="margin-bottom:3px"><strong>Placeholders</strong> (substituted at run time):</div>
+            <div style="font-family:var(--mono);font-size:10px;line-height:1.8">
+              <code>{{PROMPT}}</code> — full assembled prompt (system context + codebook + PDF + questions + answer instruction)<br>
+              <code>{{PDF_TEXT}}</code> — extracted PDF text only &nbsp;·&nbsp; <code>{{QUESTIONS}}</code> — numbered question list<br>
+              <code>{{SYSTEM_CONTEXT}}</code> — System Context box &nbsp;·&nbsp; <code>{{API_KEY}}</code> &nbsp;·&nbsp; <code>{{MODEL}}</code>
+            </div>
+            <div style="margin-top:6px"><code>response_path</code> — dotted path to the answer text in the reply (e.g. <code>choices.0.message.content</code>).</div>
+          </div>
+          <div class="form-group" style="margin-bottom:8px">
+            <textarea id="cfg-raw-template" rows="16" spellcheck="false" style="font-family:var(--mono);font-size:11px;white-space:pre;overflow-wrap:normal;overflow-x:auto"></textarea>
+          </div>
+          <button class="btn btn-sm" type="button" onclick="loadRawTemplateStarter()" style="font-size:11px">↺ Reset to DeepSeek/OpenAI starter</button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
           <input type="checkbox" id="cfg-audit-log" style="width:auto;accent-color:var(--accent)">
@@ -1568,6 +1608,7 @@ function populateProjectView(p) {
   setFileLabel('dz-q','dz-q-label',p.questions_filename);
   setFileLabel('dz-ext','dz-ext-label',p.extractor_filename);
   setFileLabel('dz-ris','dz-ris-label',p.ris_filename);
+  setFileLabel('dz-ctx','dz-ctx-label',p.extra_context_filename);
   // Config
   const prov = document.getElementById('cfg-provider');
   prov.value = p.provider || 'deepseek';
@@ -1582,6 +1623,10 @@ function populateProjectView(p) {
   document.getElementById('cfg-syscontext').value = p.system_context || DEFAULT_SYSTEM_CONTEXT;
   document.getElementById('cfg-audit-log').checked = !!p.audit_log_enabled;
   document.getElementById('cfg-reviewer-breakdown').checked = !!p.show_reviewer_breakdown;
+  // Raw API template (JSON mode)
+  document.getElementById('cfg-raw-mode').checked = !!p.raw_api_mode;
+  document.getElementById('cfg-raw-template').value = p.raw_api_template || DEFAULT_RAW_TEMPLATE;
+  switchAiCfgTab(p.raw_api_mode ? 'json' : 'basic');
 }
 
 function setFileLabel(dzId, labelId, filename) {
@@ -1646,7 +1691,46 @@ function cfgProviderChange() {
   document.getElementById('cfg-model').value = PROVIDER_MODELS[p] || '';
 }
 
+const DEFAULT_RAW_TEMPLATE = `{
+  "url": "https://api.deepseek.com/chat/completions",
+  "headers": {
+    "Authorization": "Bearer {{API_KEY}}",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "model": "{{MODEL}}",
+    "messages": [
+      {"role": "user", "content": "{{PROMPT}}"}
+    ],
+    "temperature": 0.2,
+    "max_tokens": 8000
+  },
+  "response_path": "choices.0.message.content"
+}`;
+
+function switchAiCfgTab(pane) {
+  document.querySelectorAll('.aicfg-tab').forEach(t => {
+    const on = t.getAttribute('data-pane') === pane;
+    t.classList.toggle('active', on);
+    t.style.color = on ? 'var(--accent)' : 'var(--dim)';
+    t.style.borderBottomColor = on ? 'var(--accent)' : 'transparent';
+  });
+  document.getElementById('aicfg-pane-basic').style.display = pane === 'basic' ? '' : 'none';
+  document.getElementById('aicfg-pane-json').style.display  = pane === 'json'  ? '' : 'none';
+}
+
+function loadRawTemplateStarter() {
+  document.getElementById('cfg-raw-template').value = DEFAULT_RAW_TEMPLATE;
+}
+
 async function saveConfig() {
+  const rawMode = document.getElementById('cfg-raw-mode').checked ? 1 : 0;
+  const rawTemplate = document.getElementById('cfg-raw-template').value;
+  // If raw mode is on, validate the template is parseable JSON before saving
+  if (rawMode) {
+    try { JSON.parse(rawTemplate); }
+    catch (e) { alert('Raw template is not valid JSON:\n' + e.message); return; }
+  }
   const body = {
     provider: document.getElementById('cfg-provider').value,
     model: document.getElementById('cfg-model').value.trim(),
@@ -1658,6 +1742,8 @@ async function saveConfig() {
     system_context: document.getElementById('cfg-syscontext').value.trim(),
     audit_log_enabled: document.getElementById('cfg-audit-log').checked ? 1 : 0,
     show_reviewer_breakdown: document.getElementById('cfg-reviewer-breakdown').checked ? 1 : 0,
+    raw_api_mode: rawMode,
+    raw_api_template: rawTemplate,
   };
   await fetch(`${API}/projects/${currentProjId}/config`, {
     method:'PATCH', headers:{'Content-Type':'application/json'},
@@ -1680,11 +1766,11 @@ async function uploadFile(type, input) {
     });
     if(!r.ok) { const e=await r.json(); throw new Error(e.detail); }
     const data = await r.json();
-    const labelMap = {questions:'dz-q-label', extractor:'dz-ext-label', ris:'dz-ris-label'};
-    const dzMap = {questions:'dz-q', extractor:'dz-ext', ris:'dz-ris'};
+    const labelMap = {questions:'dz-q-label', extractor:'dz-ext-label', ris:'dz-ris-label', extra_context:'dz-ctx-label'};
+    const dzMap = {questions:'dz-q', extractor:'dz-ext', ris:'dz-ris', extra_context:'dz-ctx'};
     document.getElementById(labelMap[type]).textContent = file.name;
     document.getElementById(dzMap[type]).classList.add('has-file');
-    const counts = {questions:`${data.questions} questions`, extractor:`${data.fields} fields`, ris:`${data.entries} entries`};
+    const counts = {questions:`${data.questions} questions`, extractor:`${data.fields} fields`, ris:`${data.entries} entries`, extra_context:`${data.chars} chars`};
     alert(`Uploaded: ${counts[type]}`);
     await loadProjects();
   } catch(e) { alert('Upload failed: '+e.message); }
@@ -2212,6 +2298,7 @@ function renderHumanPaperList(papers) {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
         ${doi}
         <div class="paper-prog">${p.answered} ✓</div>
+        ${p.last_coder ? `<div style="font-size:9px;color:var(--dim);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px" title="${esc(p.last_coder)}">${esc(p.last_coder)}</div>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -2284,8 +2371,8 @@ function renderFormTabs() {
   const tabs = [...new Set(hfFields.map(f=>f.tab).filter(Boolean))];
   const tabsEl = document.getElementById('form-tabs');
   tabsEl.innerHTML = tabs.map((t,i)=>
-    `<div class="form-tab ${i===0?'active':''}" onclick="switchFormTab('${esc(t)}')">${esc(t)}</div>`
-  ).join('');
+    `<div class="form-tab ${i===0?'active':''}" data-tab="${esc(t)}" onclick="switchFormTab('${esc(t)}')">${esc(t)}</div>`
+  ).join('') + `<div class="form-tab" data-tab="__log__" onclick="switchFormTab('__log__')">Log</div>`;
   hfActiveTab = tabs[0]||null;
   renderFormPane();
 }
@@ -2293,7 +2380,7 @@ function renderFormTabs() {
 function switchFormTab(tabName) {
   hfActiveTab = tabName;
   document.querySelectorAll('.form-tab').forEach(t=>{
-    t.classList.toggle('active', t.textContent===tabName);
+    t.classList.toggle('active', (t.getAttribute('data-tab')||t.textContent) === tabName);
   });
   renderFormPane();
 }
@@ -2303,6 +2390,7 @@ function renderFormPane() {
   // Preserve debounced edits before replacing the current form DOM.
   flushPendingSaves();
   if(!hfCurrentPdf){area.innerHTML='<div class="empty">Select a paper</div>';return;}
+  if(hfActiveTab === '__log__') { renderPaperLog(); return; }
   const fields = hfFields.filter(f=>f.tab===hfActiveTab);
   const bgFields = fields.filter(f=>f.qtype&&f.qtype.startsWith('BG_'));
   // Group xPO/xSO fields by numeric suffix: '' | '2' | '3' ...
@@ -3431,6 +3519,51 @@ function startLockHeartbeat() {
 
 function stopLockHeartbeat() {
   if (lockHeartbeatTimer) { clearInterval(lockHeartbeatTimer); lockHeartbeatTimer = null; }
+}
+
+// ── Per-paper audit log ──
+async function renderPaperLog() {
+  const area = document.getElementById('hf-form-area');
+  if (!currentProj || !currentProj.audit_log_enabled) {
+    area.innerHTML = `<div style="padding:24px 20px;color:var(--dim);font-size:12px;line-height:1.7">
+      Audit log is not enabled for this project.<br>
+      Enable it in <strong>Settings → Audit Log</strong> to track per-field edit history.
+    </div>`;
+    return;
+  }
+  area.innerHTML = '<div class="empty">Loading…</div>';
+  const r = await fetch(`${API}/runs/${hfRunId}/human/paper/${encodeURIComponent(hfCurrentPdf)}/log`);
+  if (!r.ok) { area.innerHTML = '<div class="empty">Failed to load log.</div>'; return; }
+  const entries = await r.json();
+  if (!entries.length) {
+    area.innerHTML = '<div class="empty">No edits recorded yet.</div>';
+    return;
+  }
+  const rows = entries.map(e => {
+    const isStatus = e.qname === '_status';
+    return `<tr>
+      <td style="padding:5px 8px;font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap">${esc((e.changed_at||'').replace('T',' ').slice(0,19))}</td>
+      <td style="padding:5px 8px;white-space:nowrap">${esc(e.coder||'—')}</td>
+      <td style="padding:5px 8px;font-size:11px">${isStatus ? '<em style="color:var(--dim)">Status</em>' : esc(e.qname||'—')}</td>
+      <td style="padding:5px 8px;color:var(--dim);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.old_answer||'')}">${esc(e.old_answer||'—')}</td>
+      <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.new_answer||'')}">${esc(e.new_answer||'—')}</td>
+    </tr>`;
+  }).join('');
+  area.innerHTML = `<div style="padding:12px 4px 40px">
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--s2);border-radius:8px;overflow:hidden">
+        <thead><tr style="background:var(--s3);color:var(--dim)">
+          <th style="padding:6px 8px;text-align:left;font-weight:500">Time</th>
+          <th style="padding:6px 8px;text-align:left;font-weight:500">Reviewer</th>
+          <th style="padding:6px 8px;text-align:left;font-weight:500">Field</th>
+          <th style="padding:6px 8px;text-align:left;font-weight:500">Before</th>
+          <th style="padding:6px 8px;text-align:left;font-weight:500">After</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="font-size:10px;color:var(--dim);margin-top:6px;text-align:right">${entries.length} edit${entries.length===1?'':'s'}</div>
+  </div>`;
 }
 
 // ── RIS abstract fill ──

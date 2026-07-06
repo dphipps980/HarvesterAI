@@ -225,9 +225,54 @@ def ris_to_bib_entries(project_id: str, ris_entries: dict) -> list:
 
 # ── API call ──────────────────────────────────────────────────────────────────
 
+def _render_raw_template(template_text, subs):
+    """Parse a raw request-template JSON and substitute {{PLACEHOLDER}} tokens
+    inside every string value. Returns (url, headers, body, response_path)."""
+    spec = json.loads(template_text)
+
+    def walk(obj):
+        if isinstance(obj, str):
+            for k, v in subs.items():
+                if k in obj:
+                    obj = obj.replace(k, v)
+            return obj
+        if isinstance(obj, list):
+            return [walk(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: walk(v) for k, v in obj.items()}
+        return obj
+
+    spec = walk(spec)
+    url = spec.get("url")
+    if not url:
+        raise ValueError("template must include a top-level \"url\"")
+    headers = spec.get("headers", {"Content-Type": "application/json"})
+    body = spec.get("body", {})
+    response_path = spec.get("response_path", "choices.0.message.content")
+    return url, headers, body, response_path
+
+
+def _extract_by_path(data, path):
+    """Walk a dotted path (e.g. 'choices.0.message.content') into a response dict."""
+    cur = data
+    for part in path.split("."):
+        if part == "":
+            continue
+        if isinstance(cur, list):
+            cur = cur[int(part)]
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return ""
+        if cur is None:
+            return ""
+    return cur
+
+
 def call_api(api_key, pdf_text, questions, question_context, model, temperature,
              top_p, system_context, provider, max_output_tokens=8000,
-             max_retries=10, ctx=None):
+             max_retries=10, ctx=None, extra_context="",
+             raw_api_mode=False, raw_api_template=""):
 
     q_parts = []
     for i, q in enumerate(questions, 1):
@@ -236,14 +281,29 @@ def call_api(api_key, pdf_text, questions, question_context, model, temperature,
             t += f"\n   {question_context[i].replace(chr(10),' ')}"
         q_parts.append(t)
 
+    extra_block = f"Additional Context/Codebook:\n{extra_context[:50000]}\n\n" if extra_context else ""
+
     user_content = (
         f"{system_context}\n\n"
+        f"{extra_block}"
         f"PDF Document:\n{pdf_text[:200000]}{'...' if len(pdf_text)>200000 else ''}\n\n"
         f"Questions:\n{chr(10).join(q_parts)}\n\n"
         "Provide answers as a numbered list. Start each answer with [[N]] where N is the question number."
     )
 
-    if provider == "anthropic":
+    response_path = None  # set only in raw mode
+
+    if raw_api_mode and raw_api_template.strip():
+        subs = {
+            "{{API_KEY}}": api_key or "",
+            "{{MODEL}}": model or "",
+            "{{PROMPT}}": user_content,
+            "{{PDF_TEXT}}": pdf_text[:200000],
+            "{{QUESTIONS}}": chr(10).join(q_parts),
+            "{{SYSTEM_CONTEXT}}": system_context or "",
+        }
+        url, headers, payload, response_path = _render_raw_template(raw_api_template, subs)
+    elif provider == "anthropic":
         url = "https://api.anthropic.com/v1/messages"
         headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
                    "Content-Type": "application/json"}
@@ -278,7 +338,12 @@ def call_api(api_key, pdf_text, questions, question_context, model, temperature,
                 if ctx: ctx.log(f"API error {resp.status_code}: {body}")
                 resp.raise_for_status()
             data = resp.json()
-            if provider == "anthropic":
+            if response_path is not None:
+                # Raw mode: pull the answer text from the user-specified path and
+                # normalize to the shape parse_answers expects. Parsing is unchanged.
+                text = _extract_by_path(data, response_path)
+                data = {"choices": [{"message": {"content": str(text or "")}}]}
+            elif provider == "anthropic":
                 text = data.get("content",[{}])[0].get("text","")
                 data = {"choices":[{"message":{"content":text}}]}
             return data
@@ -307,7 +372,8 @@ def parse_answers(response_text, num_questions):
 
 def process_batch(batch_id, pdf_batch, questions, question_context, question_names,
                   api_key, model, temperature, top_p, system_context, provider,
-                  max_output_tokens, run_id, project_id, ctx: JobContext):
+                  max_output_tokens, run_id, project_id, ctx: JobContext,
+                  extra_context="", raw_api_mode=False, raw_api_template=""):
     """Process one batch. Each pdf: {filename, text}"""
     for pdf in pdf_batch:
         if ctx.stop.is_set():
@@ -325,7 +391,8 @@ def process_batch(batch_id, pdf_batch, questions, question_context, question_nam
 
             resp = call_api(api_key, pdf["text"], questions, question_context,
                             model, temperature, top_p, system_context, provider,
-                            max_output_tokens, ctx=ctx)
+                            max_output_tokens, ctx=ctx, extra_context=extra_context,
+                            raw_api_mode=raw_api_mode, raw_api_template=raw_api_template)
             answer_text = resp["choices"][0]["message"]["content"]
             answers = parse_answers(answer_text, len(questions))
 
@@ -373,6 +440,10 @@ def run_ai_job(run_id, project_id, config, pdfs, ctx: JobContext):
     ctx.log("=== AI Extraction Starting ===")
     ctx.log(f"Provider: {config['provider']}  Model: {config['model']}")
     ctx.log(f"PDFs: {len(pdfs)}")
+    if config.get("extra_context"):
+        ctx.log(f"Extra context: {len(config['extra_context'])} chars")
+    if config.get("raw_api_mode") and config.get("raw_api_template","").strip():
+        ctx.log("Raw API template: ENABLED (Basic model settings overridden)")
 
     try:
         questions = json.loads(config.get("questions_json","[]"))
@@ -409,7 +480,10 @@ def run_ai_job(run_id, project_id, config, pdfs, ctx: JobContext):
                             config.get("temperature", 0.2), config.get("top_p", 0.95),
                             config.get("system_context",""), config["provider"],
                             config.get("max_output_tokens", 8000),
-                            run_id, project_id, ctx)
+                            run_id, project_id, ctx,
+                            extra_context=config.get("extra_context", ""),
+                            raw_api_mode=config.get("raw_api_mode", False),
+                            raw_api_template=config.get("raw_api_template", ""))
             for i, batch in enumerate(batches)
         ]
         for f in concurrent.futures.as_completed(futures):

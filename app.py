@@ -35,11 +35,12 @@ from database import (
     ai_results_for_pdf, ai_results_for_pdf_by_bib, ai_results_for_export,
     human_result_save, human_results_for_pdf, human_results_progress,
     human_paper_statuses, human_paper_statuses_by_coder, get_paper_status, human_results_for_export,
+    human_last_coders,
     paper_lock_acquire, paper_lock_release, paper_lock_get,
     bib_clear, bib_upsert_batch, bib_list, bib_get,
     user_list, user_add, user_add_with_password, user_get_by_name,
     user_set_role, user_set_password, user_list_with_roles, user_delete,
-    audit_log_append, audit_log_for_export,
+    audit_log_append, audit_log_for_export, audit_log_for_paper,
 )
 from processing import (
     parse_questions_excel, parse_extractor_excel, parse_ris,
@@ -368,6 +369,8 @@ class ConfigUpdate(BaseModel):
     system_context: Optional[str] = None
     audit_log_enabled: Optional[int] = None
     show_reviewer_breakdown: Optional[int] = None
+    raw_api_mode: Optional[int] = None
+    raw_api_template: Optional[str] = None
 
 @app.patch("/api/projects/{proj_id}/config")
 def update_config(proj_id: str, body: ConfigUpdate):
@@ -436,6 +439,31 @@ def upload_ris(proj_id: str, body: FileUpload):
         "ris_filename": body.filename,
     })
     return {"entries": len(ris_entries), "filename": body.filename}
+
+@app.post("/api/projects/{proj_id}/extra_context")
+def upload_extra_context(proj_id: str, body: FileUpload):
+    if not project_get(proj_id): raise HTTPException(404)
+    try:
+        data = base64.b64decode(body.data_b64)
+        name_lower = body.filename.lower()
+        if name_lower.endswith(".pdf"):
+            import pdfplumber, io as _io
+            text_parts = []
+            with pdfplumber.open(_io.BytesIO(data)) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        text_parts.append(t)
+            text = "\n\n".join(text_parts)
+        else:
+            text = data.decode("utf-8", errors="replace")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to read extra context file: {e}")
+    project_update(proj_id, {
+        "extra_context_text": text,
+        "extra_context_filename": body.filename,
+    })
+    return {"filename": body.filename, "chars": len(text)}
 
 @app.get("/api/projects/{proj_id}/bibliography")
 def get_bibliography(proj_id: str):
@@ -527,7 +555,7 @@ def create_ai_run(proj_id: str, body: AIRunCreate):
 
     if not proj.get("questions_json") or proj["questions_json"] == "[]":
         raise HTTPException(400, "Upload a questions file first")
-    if not proj.get("api_key"):
+    if not proj.get("raw_api_mode") and not proj.get("api_key"):
         raise HTTPException(400, "Set an API key in project config first")
 
     import random as rnd
@@ -552,6 +580,9 @@ def create_ai_run(proj_id: str, body: AIRunCreate):
         "questions_json": proj["questions_json"],
         "question_context_json": proj["question_context_json"],
         "question_names_json": proj["question_names_json"],
+        "extra_context": proj.get("extra_context_text") or "",
+        "raw_api_mode": bool(proj.get("raw_api_mode")),
+        "raw_api_template": proj.get("raw_api_template") or "",
     }
 
     ctx = JobContext(run_id, proj_id, _publish)
@@ -701,19 +732,33 @@ def get_human_run_papers(run_id: str):
         known_names = {r["pdf_filename"] for r in known}
 
     statuses = human_paper_statuses(run_id)
+    last_coders = human_last_coders(run_id)
 
     papers = []
     for b in bib:
         fn = b["pdf_filename"]
-        papers.append({**b, "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, "")})
+        papers.append({**b, "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""), "last_coder": last_coders.get(fn, "")})
         known_names.discard(fn)
 
     # Any extra filenames (human results that aren't in bib)
     for fn in known_names:
         papers.append({"pdf_filename": fn, "title":"", "authors":"", "doi":"",
-                        "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, "")})
+                        "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""), "last_coder": last_coders.get(fn, "")})
 
     return papers
+
+# NOTE: this must be declared BEFORE get_paper_form — that route's greedy
+# {pdf_filename:path} converter would otherwise swallow the trailing "/log"
+# and shadow this endpoint (both are GET).
+@app.get("/api/runs/{run_id}/human/paper/{pdf_filename:path}/log")
+def get_paper_log(run_id: str, pdf_filename: str):
+    run = run_get(run_id)
+    if not run: raise HTTPException(404)
+    proj = project_get(run["project_id"])
+    if not proj: raise HTTPException(404)
+    if not proj.get("audit_log_enabled"):
+        return []
+    return audit_log_for_paper(run_id, pdf_filename)
 
 @app.get("/api/runs/{run_id}/human/paper/{pdf_filename:path}")
 def get_paper_form(run_id: str, pdf_filename: str):

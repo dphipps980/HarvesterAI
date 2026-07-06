@@ -207,6 +207,26 @@ def init_db():
         "add projects.show_reviewer_breakdown",
         ignore_duplicate_column=True,
     )
+    _run_migration(
+        "ALTER TABLE projects ADD COLUMN extra_context_text TEXT DEFAULT ''",
+        "add projects.extra_context_text",
+        ignore_duplicate_column=True,
+    )
+    _run_migration(
+        "ALTER TABLE projects ADD COLUMN extra_context_filename TEXT DEFAULT ''",
+        "add projects.extra_context_filename",
+        ignore_duplicate_column=True,
+    )
+    _run_migration(
+        "ALTER TABLE projects ADD COLUMN raw_api_mode INTEGER DEFAULT 0",
+        "add projects.raw_api_mode",
+        ignore_duplicate_column=True,
+    )
+    _run_migration(
+        "ALTER TABLE projects ADD COLUMN raw_api_template TEXT DEFAULT ''",
+        "add projects.raw_api_template",
+        ignore_duplicate_column=True,
+    )
 
     # Migration: add paper_locks table if not present
     with get_db() as conn:
@@ -260,7 +280,9 @@ def project_get(proj_id, include_blobs=False):
                        provider, model, api_key, temperature, top_p,
                        max_output_tokens, max_workers, system_context,
                        questions_json, question_context_json, question_names_json,
-                       extractor_json, ris_raw, audit_log_enabled, show_reviewer_breakdown
+                       extractor_json, ris_raw, audit_log_enabled, show_reviewer_breakdown,
+                       extra_context_text, extra_context_filename,
+                       raw_api_mode, raw_api_template
                 FROM projects WHERE id=?""", (proj_id,)).fetchone()
         return dict(row) if row else None
 
@@ -460,6 +482,21 @@ def human_results_progress(run_id):
             (run_id,)
         ).fetchall()
         return {r["pdf_filename"]: r["cnt"] for r in rows}
+
+def human_last_coders(run_id):
+    """Return {pdf_filename: coder} for the most recent edit on each paper."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT pdf_filename, coder FROM human_results "
+            "WHERE run_id=? AND field_index >= 0 AND answer != '' "
+            "  AND updated_at = ("
+            "    SELECT MAX(hr2.updated_at) FROM human_results hr2 "
+            "    WHERE hr2.run_id = human_results.run_id AND hr2.pdf_filename = human_results.pdf_filename "
+            "    AND hr2.field_index >= 0 AND hr2.answer != '') "
+            "GROUP BY pdf_filename",
+            (run_id,)
+        ).fetchall()
+    return {r["pdf_filename"]: r["coder"] for r in rows}
 
 def human_paper_statuses(run_id):
     """Return {pdf_filename: status_str} for papers that have a status set."""
@@ -807,5 +844,13 @@ def audit_log_for_export(project_id, run_id=None):
     with get_db() as conn:
         rows = conn.execute(
             f"SELECT * FROM audit_log WHERE {cond} ORDER BY changed_at", params
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def audit_log_for_paper(run_id, pdf_filename):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE run_id=? AND pdf_filename=? ORDER BY changed_at DESC",
+            (run_id, pdf_filename)
         ).fetchall()
     return [dict(r) for r in rows]

@@ -28,4 +28,4 @@ jobs:
           push: true
           tags: |
             dphip/harvesterai:latest
-            dphip/harvesterai:v0.2.5
+            dphip/harvesterai:v0.2.6
