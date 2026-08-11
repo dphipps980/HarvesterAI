@@ -549,7 +549,13 @@ def _resolve_pdf_by_bib(proj_id: str, safe_name: str):
 def serve_project_pdf(proj_id: str, filename: str):
     safe_name = os.path.basename(filename)
     path = PDF_DIR / proj_id / safe_name
-    if not path.exists():
+    try:
+        exists = path.exists()
+    except OSError:
+        # A name the filesystem can't even represent (ENAMETOOLONG) raises here
+        # rather than returning False. It can't be on disk, so try the fallback.
+        exists = False
+    if not exists:
         path = _resolve_pdf_by_bib(proj_id, safe_name)
         if path is None:
             raise HTTPException(404, "PDF not found")
