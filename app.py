@@ -37,7 +37,8 @@ from database import (
     human_paper_statuses, human_paper_statuses_by_coder, get_paper_status, human_results_for_export,
     human_last_coders,
     paper_lock_acquire, paper_lock_release, paper_lock_get,
-    bib_clear, bib_upsert_batch, bib_list, bib_get,
+    bib_clear, bib_upsert_batch, bib_list, bib_get, bib_get_by_file,
+    match_filename_by_bib,
     user_list, user_add, user_add_with_password, user_get_by_name,
     user_set_role, user_set_password, user_list_with_roles, user_delete,
     audit_log_append, audit_log_for_export, audit_log_for_paper,
@@ -490,15 +491,24 @@ def upload_project_pdfs(proj_id: str, body: List[PdfUploadItem]):
         raise HTTPException(404)
     proj_pdf_dir = PDF_DIR / proj_id
     proj_pdf_dir.mkdir(parents=True, exist_ok=True)
-    saved = []
+    saved, failed = [], []
     for item in body:
         safe_name = os.path.basename(item.filename)
         if not safe_name:
             continue
-        data = base64.b64decode(item.data_b64)
-        (proj_pdf_dir / safe_name).write_bytes(data)
-        saved.append(safe_name)
-    return {"saved": len(saved)}
+        try:
+            data = base64.b64decode(item.data_b64)
+            (proj_pdf_dir / safe_name).write_bytes(data)
+            saved.append(safe_name)
+        except OSError as e:
+            # ENAMETOOLONG, disk full, illegal characters — one unwritable file
+            # must not take down the rest of the batch
+            logger.warning("PDF upload failed for %s in project %s: %s", safe_name, proj_id, e)
+            failed.append({"filename": safe_name, "reason": e.strerror or str(e)})
+        except Exception as e:
+            logger.exception("PDF upload failed for %s in project %s", safe_name, proj_id)
+            failed.append({"filename": safe_name, "reason": str(e)})
+    return {"saved": len(saved), "failed": failed}
 
 @app.get("/api/projects/{proj_id}/pdfs")
 def list_project_pdfs(proj_id: str):
@@ -521,12 +531,28 @@ def clear_project_pdfs(proj_id: str):
         shutil.rmtree(proj_pdf_dir)
     return {"cleared": True}
 
+def _resolve_pdf_by_bib(proj_id: str, safe_name: str):
+    """Files renamed by Zotfile are stored under a different name than the one the
+    RIS recorded, so an exact lookup misses even though the PDF is present. Fall
+    back to the same author+year/DOI matching used for AI results."""
+    proj_pdf_dir = PDF_DIR / proj_id
+    if not proj_pdf_dir.is_dir():
+        return None
+    bib = bib_get_by_file(proj_id, safe_name)
+    if not bib:
+        return None
+    candidates = [f.name for f in proj_pdf_dir.iterdir() if f.is_file()]
+    match = match_filename_by_bib(bib, candidates)
+    return proj_pdf_dir / match if match else None
+
 @app.get("/pdfs/{proj_id}/{filename}")
 def serve_project_pdf(proj_id: str, filename: str):
     safe_name = os.path.basename(filename)
     path = PDF_DIR / proj_id / safe_name
     if not path.exists():
-        raise HTTPException(404, "PDF not found")
+        path = _resolve_pdf_by_bib(proj_id, safe_name)
+        if path is None:
+            raise HTTPException(404, "PDF not found")
     return FileResponse(str(path), media_type="application/pdf")
 
 

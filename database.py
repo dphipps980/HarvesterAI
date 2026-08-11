@@ -374,10 +374,37 @@ def ai_results_insert_batch(rows: list):
         )
         conn.commit()
 
-def ai_results_for_pdf_by_bib(project_id, bib, run_id=None):
-    """Fallback: find AI results using author+year or DOI when filenames don't match.
-    Handles Zotfile-renamed files (e.g. 'Smith-2023-Title.pdf') vs RIS storage names."""
+def match_filename_by_bib(bib, filenames):
+    """Pick the one filename in `filenames` that belongs to bibliography entry `bib`.
+    Handles Zotfile-renamed files (e.g. 'Smith-2023-Title.pdf') vs RIS storage names.
+    Returns None unless exactly one candidate matches, so an ambiguous guess is
+    never served in place of the real paper."""
     import re
+    # Strategy 1: first author last name + year (Zotfile: "Smith-2023-Title.pdf")
+    authors = bib.get("authors", "")
+    year = bib.get("year", "")
+    if authors and year:
+        raw_lastname = authors.split(';')[0].split(',')[0].strip()
+        lastname = re.sub(r'[^a-z]', '', raw_lastname.lower())
+        if lastname:
+            matches = [fn for fn in filenames
+                       if lastname in re.sub(r'[^a-z]', '', fn.lower()) and year in fn]
+            if len(matches) == 1:
+                return matches[0]
+
+    # Strategy 2: DOI suffix in filename (e.g. filename IS the DOI article number)
+    doi = bib.get("doi", "")
+    if doi:
+        doi_suffix = doi.split('/')[-1].lower()
+        if len(doi_suffix) > 4:
+            matches = [fn for fn in filenames if doi_suffix in fn.lower()]
+            if len(matches) == 1:
+                return matches[0]
+
+    return None
+
+def ai_results_for_pdf_by_bib(project_id, bib, run_id=None):
+    """Fallback: find AI results using author+year or DOI when filenames don't match."""
     with get_db() as conn:
         if run_id:
             rows = conn.execute(
@@ -389,28 +416,8 @@ def ai_results_for_pdf_by_bib(project_id, bib, run_id=None):
             ).fetchall()
     filenames = [r["pdf_filename"] for r in rows]
 
-    # Strategy 1: first author last name + year (Zotfile: "Smith-2023-Title.pdf")
-    authors = bib.get("authors", "")
-    year = bib.get("year", "")
-    if authors and year:
-        raw_lastname = authors.split(';')[0].split(',')[0].strip()
-        lastname = re.sub(r'[^a-z]', '', raw_lastname.lower())
-        if lastname:
-            matches = [fn for fn in filenames
-                       if lastname in re.sub(r'[^a-z]', '', fn.lower()) and year in fn]
-            if len(matches) == 1:
-                return ai_results_for_pdf(project_id, matches[0], run_id=run_id)
-
-    # Strategy 2: DOI suffix in filename (e.g. filename IS the DOI article number)
-    doi = bib.get("doi", "")
-    if doi:
-        doi_suffix = doi.split('/')[-1].lower()
-        if len(doi_suffix) > 4:
-            matches = [fn for fn in filenames if doi_suffix in fn.lower()]
-            if len(matches) == 1:
-                return ai_results_for_pdf(project_id, matches[0], run_id=run_id)
-
-    return {}
+    match = match_filename_by_bib(bib, filenames)
+    return ai_results_for_pdf(project_id, match, run_id=run_id) if match else {}
 
 def ai_results_for_pdf(project_id, pdf_filename, run_id=None):
     """Return {question_num: answer} for one PDF."""
@@ -633,6 +640,28 @@ def bib_get(project_id, pdf_filename):
             (project_id, pdf_filename, f"%{base}")
         ).fetchone()
         return dict(row) if row else {}
+
+def bib_get_by_file(project_id, filename):
+    """Bibliography entry for a requested PDF file, matched against the stored
+    filename or the RIS path's basename. Exact matches are tried first: storage
+    names routinely contain '%' (e.g. '10.1007%2Fs10389-004-0091-9.pdf'), which
+    is a LIKE wildcard and would otherwise match the wrong paper."""
+    base = filename.replace("\\","/").split("/")[-1]
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM bibliography WHERE project_id=? AND (pdf_filename=? OR pdf_rel_path=?)",
+            (project_id, base, base)
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT * FROM bibliography WHERE project_id=? AND "
+                "(pdf_filename LIKE ? ESCAPE '\\' OR pdf_rel_path LIKE ? ESCAPE '\\')",
+                (project_id, f"%{_like_escape(base)}", f"%{_like_escape(base)}")
+            ).fetchone()
+        return dict(row) if row else {}
+
+def _like_escape(s):
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 # ── Backup / Restore ──────────────────────────────────────────────────────────

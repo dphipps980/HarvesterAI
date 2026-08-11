@@ -1954,9 +1954,12 @@ function showPdfReuseDialog(existingCount, totalCount) {
   });
 }
 
+// Returns a list of {filename, reason} for anything that didn't make it to the
+// server. A failure never aborts the run — the PDFs after it still get uploaded.
 async function uploadPdfsToServer(fileObjects, projId, onProgress) {
   const BATCH = 5;
   let done = 0;
+  const failed = [];
   for (let i = 0; i < fileObjects.length; i += BATCH) {
     const batch = fileObjects.slice(i, i + BATCH);
     const payloads = await Promise.all(batch.map(async f => {
@@ -1966,14 +1969,21 @@ async function uploadPdfsToServer(fileObjects, projId, onProgress) {
       for (let j = 0; j < bytes.length; j++) binary += String.fromCharCode(bytes[j]);
       return {filename: f.name, data_b64: btoa(binary)};
     }));
-    const r = await fetch(`${API}/projects/${projId}/pdfs`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payloads)
-    });
-    if (!r.ok) throw new Error('Failed to upload PDFs to server');
+    try {
+      const r = await fetch(`${API}/projects/${projId}/pdfs`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payloads)
+      });
+      if (!r.ok) throw new Error(`server returned ${r.status}`);
+      const res = await r.json();
+      (res.failed || []).forEach(f => failed.push(f));
+    } catch (e) {
+      batch.forEach(f => failed.push({filename: f.name, reason: e.message}));
+    }
     done += batch.length;
     if (onProgress) onProgress(done, fileObjects.length);
   }
+  return failed;
 }
 
 async function submitAIRun() {
@@ -2012,8 +2022,15 @@ async function submitAIRun() {
     const uploadWrap = document.getElementById('ar-upload-wrap');
     const uploadBar = document.getElementById('upload-bar');
     const uploadLabel = document.getElementById('upload-label');
+    const uploadIssues = [];
     const filesToUpload = pdfsToSubmit
-      .map(p => allPdfFiles.find(f => f.name === p.filename))
+      .map(p => {
+        const f = allPdfFiles.find(f => f.name === p.filename);
+        // Extracted for the AI run but the file itself is no longer reachable —
+        // it would otherwise vanish from the upload with no trace.
+        if (!f) uploadIssues.push({filename: p.filename, reason: 'file not found in selected folder'});
+        return f;
+      })
       .filter(Boolean);
 
     let filesToActuallyUpload = filesToUpload;
@@ -2032,14 +2049,26 @@ async function submitAIRun() {
     uploadBar.style.width = '0%';
     if (filesToActuallyUpload.length > 0) {
       uploadLabel.textContent = `Uploading 0 / ${filesToActuallyUpload.length}`;
-      await uploadPdfsToServer(filesToActuallyUpload, currentProjId, (done, total) => {
+      const failed = await uploadPdfsToServer(filesToActuallyUpload, currentProjId, (done, total) => {
         uploadBar.style.width = Math.round(done / total * 100) + '%';
         uploadLabel.textContent = `Uploading ${done} / ${total}`;
       });
-      uploadLabel.textContent = `✓ ${filesToActuallyUpload.length} PDFs uploaded`;
+      failed.forEach(f => uploadIssues.push(f));
+      const okCount = filesToActuallyUpload.length - failed.length;
+      uploadLabel.textContent = `✓ ${okCount} PDFs uploaded`;
     } else {
       uploadBar.style.width = '100%';
       uploadLabel.textContent = `✓ Using ${filesToUpload.length} existing PDFs on server`;
+    }
+    if (uploadIssues.length) {
+      uploadLabel.innerHTML += ` <span style="color:var(--red)">— ${uploadIssues.length} not stored</span>`;
+      console.warn('PDFs not stored on server:', uploadIssues);
+      const names = uploadIssues.slice(0, 8).map(f => `• ${f.filename} — ${f.reason}`).join('\n');
+      alert(
+        `${uploadIssues.length} PDF${uploadIssues.length !== 1 ? 's were' : ' was'} not stored on the server.\n\n` +
+        `${names}${uploadIssues.length > 8 ? `\n…and ${uploadIssues.length - 8} more (see console)` : ''}\n\n` +
+        `The AI run still covers every selected paper — only the 📄 PDF viewer is affected for these.`
+      );
     }
   }
 
