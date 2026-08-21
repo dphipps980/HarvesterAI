@@ -969,6 +969,28 @@ def _sanitize_df(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
+# Outcome blocks: every field of a block carries the block in its qtype
+# ("xPO3_GMeansTable" → PO3), and the block's specifier is "POutcomeSpecifier3".
+_X_BLOCK_RE    = _re.compile(r"^x(P|S)O(\d*)_")
+_SPEC_BLOCK_RE = _re.compile(r"^(P|S)OutcomeSpecifier(\d*)$")
+# The suffix _wide_col_keys appends to a repeated question: " [PO3]", " [#45]", " [PO3 #45]"
+_DISAMBIG_RE   = _re.compile(r" \[(?:[PS]O\d*(?: #\d+)?|#\d+)\]$")
+
+def _outcome_block(qtype: str) -> Optional[str]:
+    """Return the outcome block a field belongs to ('PO', 'PO3', 'SO2'), or None."""
+    m = _X_BLOCK_RE.match(qtype or "") or _SPEC_BLOCK_RE.match(qtype or "")
+    return f"{m.group(1)}O{m.group(2)}" if m else None
+
+
+def _insert_unique(df: "pd.DataFrame", pos: int, name, vals) -> str:
+    """Insert a column, suffixing the name if it is taken, so we never raise."""
+    final, n = name, 2
+    while final in df.columns:
+        final = f"{name}_{n}"; n += 1
+    df.insert(pos, final, vals)
+    return final
+
+
 def _explode_group_cols(df: "pd.DataFrame") -> "pd.DataFrame":
     """Expand GroupSpecifier and GMeansTable JSON columns into per-group flat columns."""
     def _try_json(v):
@@ -1016,7 +1038,7 @@ def _explode_group_cols(df: "pd.DataFrame") -> "pd.DataFrame":
         ("CG_Name","control","name"),      ("CG_N","control","n"),
     ]):
         vals = [main_g(paper_groups.get(idx,{}), role) for idx in df.index]
-        df.insert(gs_pos + i, col_name, [g.get(field,"") if g else "" for g in vals])
+        _insert_unique(df, gs_pos + i, col_name, [g.get(field,"") if g else "" for g in vals])
 
     # Explode GMeansTable columns
     for gmt_col in gmt_cols:
@@ -1048,13 +1070,34 @@ def _explode_group_cols(df: "pd.DataFrame") -> "pd.DataFrame":
                 if gid and isinstance(p, dict):
                     cell = p.get("data",{}).get(gid,{}).get(f"{tp}_{stat}","")
                 vals.append(cell)
-            df.insert(gmt_pos + insert_i, col_name, vals)
+            _insert_unique(df, gmt_pos + insert_i, col_name, vals)
 
     return df
 
 
-def _explode_outcome_cols(df: "pd.DataFrame") -> "pd.DataFrame":
-    """Expand POutcomeSpecifier/SOutcomeSpecifier and xPO_/xSO_GMeansTable JSON columns."""
+def _unique_label(lbl: str, fi, used: set) -> str:
+    """Keep one block label per source column so exploded names never collide.
+
+    Columns whose block could not be resolved all fall back to 'PO'/'SO' — tag those
+    with their field index ('PO#44') so each still points back at one question.
+    """
+    cand = lbl
+    if cand in used and fi is not None:
+        cand = f"{lbl}#{fi}"
+    n = 2
+    while cand in used:
+        cand = f"{lbl}.{n}"; n += 1
+    used.add(cand); return cand
+
+
+def _explode_outcome_cols(df: "pd.DataFrame", blocks: Optional[dict] = None) -> "pd.DataFrame":
+    """Expand POutcomeSpecifier/SOutcomeSpecifier and xPO_/xSO_GMeansTable JSON columns.
+
+    `blocks` maps a column name to (outcome block, field index) as declared by the
+    extractor — e.g. ("PO3", 59). Without it we fall back to guessing primary/secondary
+    from the question text, which cannot tell two secondary blocks apart.
+    """
+    blocks = blocks or {}
     def _try_json(v):
         if not isinstance(v, str) or not v.strip(): return None
         try: return json.loads(v)
@@ -1078,18 +1121,36 @@ def _explode_outcome_cols(df: "pd.DataFrame") -> "pd.DataFrame":
     # Collect specifier columns and xO GMeansTable columns
     outcome_spec_cols = []   # (col, label_prefix)  e.g. ("POutcomeSpecifier_col", "PO")
     xo_gmt_cols = []         # (col, label_prefix)
+    # Separate namespaces: a block's specifier and its means table share a label
+    # on purpose ("O_PO3_1_Name" vs "O_PO3<outcome id>_IG_M__Pre_Means").
+    used_spec: set = set()
+    used_gmt: set = set()
 
+    spec_cands, gmt_cands = [], []   # (col, block or None, field index or None)
     for col in df.columns:
         non_null = df[col].dropna()
         if non_null.empty: continue
         sample = non_null.iloc[0]
+        blk, fi = blocks.get(col, (None, None))
         if _is_outcomespec(sample):
-            # Infer primary vs secondary from column name (qname)
-            lbl = "SO" if "secondary" in col.lower() or col.lower().startswith("so") else "PO"
-            outcome_spec_cols.append((col, lbl))
+            spec_cands.append((col, blk, fi))
         elif _is_xo_gmeans(sample):
-            lbl = "SO" if "xso" in col.lower() else "PO"
-            xo_gmt_cols.append((col, lbl))
+            gmt_cands.append((col, blk, fi))
+
+    # Label the columns whose block the extractor confirmed first, so a column left
+    # to the primary/secondary guess below can never take a real block's label.
+    for cands, out, used, guess in (
+        (spec_cands, outcome_spec_cols, used_spec,
+         lambda c: "SO" if "secondary" in c.lower() or c.lower().startswith("so") else "PO"),
+        (gmt_cands, xo_gmt_cols, used_gmt,
+         lambda c: "SO" if "xso" in c.lower() else "PO"),
+    ):
+        labelled = {}
+        for col, blk, fi in cands:
+            if blk: labelled[col] = _unique_label(blk, fi, used)
+        for col, blk, fi in cands:
+            if not blk: labelled[col] = _unique_label(guess(col), fi, used)
+        out.extend((col, labelled[col]) for col, _, _ in cands)
 
     if not outcome_spec_cols:
         return df
@@ -1113,7 +1174,7 @@ def _explode_outcome_cols(df: "pd.DataFrame") -> "pd.DataFrame":
                     paper_outcomes.get(idx, [])[i].get(field, "") if i < len(paper_outcomes.get(idx, [])) else ""
                     for idx in df.index
                 ]
-                df.insert(os_pos + insert_offset, col_name, vals)
+                _insert_unique(df, os_pos + insert_offset, col_name, vals)
                 insert_offset += 1
 
     # Explode xPO_/xSO_GMeansTable columns → per-outcome per-group M/SD columns
@@ -1138,11 +1199,12 @@ def _explode_outcome_cols(df: "pd.DataFrame") -> "pd.DataFrame":
         xo_pos = df.columns.get_loc(xo_col)
         df = df.drop(columns=[xo_col])
 
+        xo_base = _DISAMBIG_RE.sub("", str(xo_col))
         new_cols = []
         for oid in all_outcome_ids:
             for grp_prefix, stat in [("IG","M"),("IG","SD"),("CG","M"),("CG","SD")]:
                 for tp in all_tps_by_oid.get(oid, []):
-                    new_cols.append((f"O_{lbl}{oid}_{grp_prefix}_{stat}__{tp}_{xo_col}", oid, grp_prefix, tp, stat))
+                    new_cols.append((f"O_{lbl}{oid}_{grp_prefix}_{stat}__{tp}_{xo_base}", oid, grp_prefix, tp, stat))
 
         for insert_i, (col_name, oid, grp_prefix, tp, stat) in enumerate(new_cols):
             vals = []
@@ -1159,7 +1221,7 @@ def _explode_outcome_cols(df: "pd.DataFrame") -> "pd.DataFrame":
                                 # TODO: filter by group role once GroupSpecifier data is cross-referenced
                                 break
                 vals.append(cell)
-            df.insert(xo_pos + insert_i, col_name, vals)
+            _insert_unique(df, xo_pos + insert_i, col_name, vals)
 
     return df
 
@@ -1245,9 +1307,58 @@ def _explode_cortable_cols(df: "pd.DataFrame") -> "pd.DataFrame":
 
         df = df.drop(columns=[ct_col])
         for i, (col_name, col_vals) in enumerate(new_cols.items()):
-            df.insert(ct_pos + i, col_name, col_vals)
+            _insert_unique(df, ct_pos + i, col_name, col_vals)
 
     return df
+
+
+def _wide_col_keys(df_h: "pd.DataFrame", proj_id: str):
+    """Column keys for the human wide pivot, unique per field.
+
+    Question text is not unique — an extractor repeats the same questions in every
+    outcome block. Names used by a single field are left as-is (so existing exports
+    keep their headers); a name shared by several fields gets its outcome block
+    appended ("Means [PO3]"), falling back to the field index.
+
+    Returns (column name → (outcome block, field index), key per row of df_h).
+    """
+    proj = project_get(proj_id) or {}
+    try:
+        extractor = json.loads(proj.get("extractor_json") or "[]")
+    except (TypeError, ValueError):
+        extractor = []
+    # Field indices shift when an extractor is edited, so an answer saved by an older
+    # run can sit at an index that now holds a different question. Only trust the
+    # block when the stored question still matches the one defined at that index.
+    block_by_fi = {}
+    for f in extractor:
+        if not isinstance(f, dict) or f.get("field_index") is None: continue
+        blk = _outcome_block(f.get("qtype") or "")
+        if blk: block_by_fi[int(f["field_index"])] = (blk, f.get("question") or "")
+
+    base = df_h["qname"].where(df_h["qname"] != "", "Field_" + df_h["field_index"].astype(str))
+    fields = df_h["field_index"].astype(int)
+    shared = {b for b, n in fields.groupby(base).nunique().items() if n > 1}
+
+    def block_of(b, fi):
+        blk, question = block_by_fi.get(fi, (None, None))
+        return blk if blk and question == b else None
+
+    counts = {}
+    for b, fi in zip(base, fields):
+        counts.setdefault(b, set()).add(fi)
+
+    def key(b, fi):
+        if b not in shared: return b
+        blk = block_of(b, fi)
+        if not blk: return f"{b} [#{fi}]"
+        # Two fields of the same block can carry the same question; keep the index too.
+        same_block = [i for i in counts[b] if block_of(b, i) == blk]
+        return f"{b} [{blk}]" if len(same_block) == 1 else f"{b} [{blk} #{fi}]"
+
+    keys = [key(b, fi) for b, fi in zip(base, fields)]
+    block_by_col = {k: (block_of(b, fi), fi) for k, b, fi in zip(keys, base, fields)}
+    return block_by_col, keys
 
 
 @app.get("/api/projects/{proj_id}/export")
@@ -1333,7 +1444,12 @@ def export_project(proj_id: str,
                     sheets_written += 1
 
                 if fmt in ("wide", "both"):
-                    df_h["col"] = df_h["qname"].where(df_h["qname"]!="", "Field_" + df_h["field_index"].astype(str))
+                    # Question names repeat across outcome blocks (every block has a
+                    # "Means", a "Describe the measure", ...), so key the pivot on a
+                    # name made unique per field — otherwise the blocks collapse into
+                    # one column and all but the first are dropped.
+                    block_by_col, col_keys = _wide_col_keys(df_h, proj_id)
+                    df_h["col"] = col_keys
                     df_wide_h = df_h.pivot_table(
                         index="pdf_filename", columns="col", values="answer", aggfunc="first"
                     ).reset_index()
@@ -1344,7 +1460,7 @@ def export_project(proj_id: str,
                     df_wide_h["log"]        = log_series.reindex(df_wide_h["pdf_filename"]).values
                     df_wide_h["status_log"] = sl_series.reindex(df_wide_h["pdf_filename"]).values
                     df_wide_h = _explode_group_cols(df_wide_h)
-                    df_wide_h = _explode_outcome_cols(df_wide_h)
+                    df_wide_h = _explode_outcome_cols(df_wide_h, block_by_col)
                     df_wide_h = _explode_cortable_cols(df_wide_h)
                     _sanitize_df(df_wide_h).to_excel(writer, sheet_name="Human_Wide", index=False)
                     sheets_written += 1

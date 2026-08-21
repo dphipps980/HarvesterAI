@@ -3748,6 +3748,12 @@ async function exportProject(fmt='both') {
   const params = new URLSearchParams({source, fmt});
   if(runId) params.set('run_id',runId);
   const r = await fetch(`${API}/projects/${currentProjId}/export?${params}`);
+  if(r.status === 401){
+    // Opening the export URL directly in a tab sends no token; so does a signed-out session.
+    alert('Your session has expired. Please sign in again, then retry the export.');
+    if(AUTH_MODE === 'login') logout();
+    return;
+  }
   if(!r.ok){alert('Export failed: '+(await r.text()));return;}
   const blob = await r.blob();
   const cd = r.headers.get('content-disposition')||'';
