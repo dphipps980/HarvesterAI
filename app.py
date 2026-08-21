@@ -1211,6 +1211,18 @@ def _explode_cortable_cols(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
+def _order_columns(df: "pd.DataFrame", lead, trail=()) -> "pd.DataFrame":
+    """Put identity and bibliography columns first and admin columns last.
+
+    Anything not named keeps its order in between, so the answers stay together.
+    """
+    lead = [c for c in lead if c in df.columns]
+    trail = [c for c in trail if c in df.columns]
+    named = set(lead) | set(trail)
+    middle = [c for c in df.columns if c not in named]
+    return df[lead + middle + trail]
+
+
 def _wide_col_keys(df_h: "pd.DataFrame", proj_id: str):
     """Column keys for the human wide pivot, unique per field.
 
@@ -1364,37 +1376,6 @@ def export_project(proj_id: str,
     sheets_written = 0
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
-        if source in ("ai", "both"):
-            ai_rows = ai_results_for_export(proj_id, runs)
-            if allowed is not None:
-                ai_rows = [r for r in ai_rows if r["pdf_filename"] in allowed]
-            if ai_rows:
-                df_long = pd.DataFrame(ai_rows)
-                df_long.insert(1, "run", df_long["run_id"].map(run_label))
-                bib_cols = AI_BIB if include_bib else []
-                if fmt in ("long", "both"):
-                    drop = [] if include_bib else [c for c in AI_BIB if c in df_long.columns]
-                    _sanitize_df(df_long.drop(columns=drop)).to_excel(writer, sheet_name="AI_Long", index=False)
-                    sheets_written += 1
-
-                if fmt in ("wide", "both"):
-                    names = {int(k):v for k,v in json.loads(proj.get("question_names_json","{}")).items()}
-                    df_long["Q_num"] = df_long.groupby(["pdf_filename","run_id"]).cumcount() + 1
-                    df_wide = df_long.pivot(index=["pdf_filename","run_id"], columns="Q_num",
-                                            values="answer").reset_index()
-                    pairs = pd.MultiIndex.from_frame(df_wide[["pdf_filename","run_id"]])
-                    for col in bib_cols:
-                        df_wide[col] = df_long.groupby(["pdf_filename","run_id"])[col].first().reindex(pairs).values
-                    df_wide["run"] = df_wide["run_id"].map(run_label)
-
-                    q_cols = sorted(c for c in df_wide.columns if isinstance(c, int))
-                    for q in q_cols:
-                        df_wide.rename(columns={q: names.get(q, f"Q{q}")}, inplace=True)
-                    col_order = ["pdf_filename","run"] + bib_cols + [names.get(q, f"Q{q}") for q in q_cols]
-                    df_wide = df_wide[[c for c in col_order if c in df_wide.columns]]
-                    _sanitize_df(df_wide).to_excel(writer, sheet_name="AI_Wide", index=False)
-                    sheets_written += 1
-
         if source in ("human", "both"):
             if allowed is not None:
                 hr_rows = [r for r in hr_rows if r["pdf_filename"] in allowed]
@@ -1448,6 +1429,10 @@ def export_project(proj_id: str,
                     drop = [] if include_bib else [c for c in HUM_BIB + ["abstract"] if c in df_h.columns]
                     df_long_h = df_h.drop(columns=drop).copy()
                     df_long_h["pdf_filename"] = df_long_h["pdf_filename"].map(paper_parent)
+                    df_long_h = _order_columns(
+                        df_long_h,
+                        ["pdf_filename", "entry", "run"] + [c for c in HUM_BIB if include_bib],
+                        ["run_id"])
                     _sanitize_df(df_long_h).to_excel(writer, sheet_name="Human_Long", index=False)
                     sheets_written += 1
 
@@ -1471,12 +1456,49 @@ def export_project(proj_id: str,
                     entry_by_key = df_h.groupby("pdf_filename")["entry"].first()
                     df_wide_h.insert(1, "entry", df_wide_h["pdf_filename"].map(entry_by_key).fillna(""))
                     df_wide_h["pdf_filename"] = df_wide_h["pdf_filename"].map(paper_parent)
+                    df_wide_h = _order_columns(
+                        df_wide_h,
+                        ["pdf_filename", "entry", "run"] + [c for c in HUM_BIB if include_bib],
+                        ["log", "status_log"])
                     df_wide_h = _explode_group_cols(df_wide_h)
                     # Outcome specifiers and xPO_/xSO_ means tables stay as raw JSON:
                     # the exploder gave every control column the intervention values.
                     # See OUTCOME_EXPLODE_NOTES.md before bringing it back.
                     df_wide_h = _explode_cortable_cols(df_wide_h)
                     _sanitize_df(df_wide_h).to_excel(writer, sheet_name="Human_Wide", index=False)
+                    sheets_written += 1
+
+        if source in ("ai", "both"):
+            ai_rows = ai_results_for_export(proj_id, runs)
+            if allowed is not None:
+                ai_rows = [r for r in ai_rows if r["pdf_filename"] in allowed]
+            if ai_rows:
+                df_long = pd.DataFrame(ai_rows)
+                df_long.insert(1, "run", df_long["run_id"].map(run_label))
+                bib_cols = AI_BIB if include_bib else []
+                if fmt in ("long", "both"):
+                    drop = [] if include_bib else [c for c in AI_BIB if c in df_long.columns]
+                    df_long_ai = _order_columns(df_long.drop(columns=drop),
+                                                ["pdf_filename", "run"] + bib_cols, ["run_id"])
+                    _sanitize_df(df_long_ai).to_excel(writer, sheet_name="AI_Long", index=False)
+                    sheets_written += 1
+
+                if fmt in ("wide", "both"):
+                    names = {int(k):v for k,v in json.loads(proj.get("question_names_json","{}")).items()}
+                    df_long["Q_num"] = df_long.groupby(["pdf_filename","run_id"]).cumcount() + 1
+                    df_wide = df_long.pivot(index=["pdf_filename","run_id"], columns="Q_num",
+                                            values="answer").reset_index()
+                    pairs = pd.MultiIndex.from_frame(df_wide[["pdf_filename","run_id"]])
+                    for col in bib_cols:
+                        df_wide[col] = df_long.groupby(["pdf_filename","run_id"])[col].first().reindex(pairs).values
+                    df_wide["run"] = df_wide["run_id"].map(run_label)
+
+                    q_cols = sorted(c for c in df_wide.columns if isinstance(c, int))
+                    for q in q_cols:
+                        df_wide.rename(columns={q: names.get(q, f"Q{q}")}, inplace=True)
+                    col_order = ["pdf_filename","run"] + bib_cols + [names.get(q, f"Q{q}") for q in q_cols]
+                    df_wide = df_wide[[c for c in col_order if c in df_wide.columns]]
+                    _sanitize_df(df_wide).to_excel(writer, sheet_name="AI_Wide", index=False)
                     sheets_written += 1
 
         if proj.get("audit_log_enabled"):

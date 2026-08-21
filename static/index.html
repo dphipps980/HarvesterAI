@@ -195,6 +195,13 @@ hr.info-div{border:none;border-top:1px solid var(--border)}
 .export-opt{padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap}
 .export-opt:hover{background:var(--s2)}
 .exp-check{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 0;cursor:pointer;line-height:1.5}
+/* Masked without type=password, so no browser treats it as a login credential */
+.secret-wrap{position:relative;display:flex;align-items:center}
+.secret-wrap input{flex:1;padding-right:32px!important}
+.secret-input{-webkit-text-security:disc}
+.secret-input.revealed{-webkit-text-security:none}
+.secret-eye{position:absolute;right:4px;background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:4px 6px;line-height:1;border-radius:4px}
+.secret-eye:hover{color:var(--accent);background:var(--s2)}
 .paper-card.is-sub{margin-left:14px;border-left:2px solid var(--border)}
 /* Split papers highlight in two tiers: the entry you have open takes the normal
    active treatment, while the paper it belongs to and its sibling studies get a
@@ -568,11 +575,14 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
         </div>
         <div class="form-group" style="flex:2">
           <label>Model</label>
-          <input id="np-model" type="text" value="deepseek-chat">
+          <input id="np-model" type="text" value="deepseek-chat" autocomplete="off" data-1p-ignore data-form-type="other">
         </div>
         <div class="form-group" style="flex:2">
           <label>API Key <i class="tip-icon" data-tip-key="api-key">ⓘ</i></label>
-          <input id="np-apikey" type="password" placeholder="sk-…" autocomplete="new-password">
+          <div class="secret-wrap">
+            <input id="np-apikey" type="text" class="secret-input" placeholder="sk-…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
+            <button type="button" class="secret-eye" onclick="toggleSecret('np-apikey')" title="Show / hide">👁</button>
+          </div>
         </div>
       </div>
       <div class="form-row">
@@ -1253,11 +1263,14 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           </div>
           <div class="form-group" style="flex:2">
             <label>Model</label>
-            <input id="cfg-model" type="text" value="deepseek-chat">
+            <input id="cfg-model" type="text" value="deepseek-chat" autocomplete="off" data-1p-ignore data-form-type="other">
           </div>
           <div class="form-group" style="flex:2">
             <label>API Key <i class="tip-icon" data-tip-key="api-key">ⓘ</i></label>
-            <input id="cfg-apikey" type="password" placeholder="sk-…" autocomplete="new-password">
+            <div class="secret-wrap">
+              <input id="cfg-apikey" type="text" class="secret-input" placeholder="sk-…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
+              <button type="button" class="secret-eye" onclick="toggleSecret('cfg-apikey')" title="Show / hide">👁</button>
+            </div>
           </div>
         </div>
         <div class="form-row">
@@ -1636,7 +1649,7 @@ async function createProject() {
 
   // 3. Save AI config if anything was filled
   const model = document.getElementById('np-model').value.trim();
-  const apikey = document.getElementById('np-apikey').value.trim();
+  const apikey = secretGet('np-apikey');
   if (model || apikey) {
     status.textContent = 'Saving configuration…';
     await fetch(`${API}/projects/${currentProjId}/config`, {
@@ -1658,9 +1671,10 @@ async function createProject() {
   npFiles = {questions: null, extractor: null, ris: null};
   btn.disabled = false;
   status.textContent = '';
-  ['np-name','np-desc','np-model','np-apikey','np-syscontext'].forEach(id=>{
+  ['np-name','np-desc','np-model','np-syscontext'].forEach(id=>{
     const el = document.getElementById(id); if(el) el.value = id==='np-model' ? 'deepseek-chat' : '';
   });
+  secretSet('np-apikey', '');
   ['np-dz-q','np-dz-ext','np-dz-ris'].forEach(id=>document.getElementById(id)?.classList.remove('has-file'));
   ['np-dz-q-label','np-dz-ext-label','np-dz-ris-label'].forEach(id=>{
     const el = document.getElementById(id); if(el) el.textContent = 'Not uploaded';
@@ -1703,7 +1717,7 @@ function populateProjectView(p) {
   const prov = document.getElementById('cfg-provider');
   prov.value = p.provider || 'deepseek';
   document.getElementById('cfg-model').value = p.model || '';
-  document.getElementById('cfg-apikey').value = p.api_key || '';
+  secretSet('cfg-apikey', p.api_key || '');
   document.getElementById('cfg-temp').value = p.temperature ?? 0.2;
   document.getElementById('cfg-temp-v').textContent = p.temperature ?? 0.2;
   document.getElementById('cfg-topp').value = p.top_p ?? 0.95;
@@ -1824,7 +1838,7 @@ async function saveConfig() {
   const body = {
     provider: document.getElementById('cfg-provider').value,
     model: document.getElementById('cfg-model').value.trim(),
-    api_key: document.getElementById('cfg-apikey').value.trim(),
+    api_key: secretGet('cfg-apikey'),
     temperature: parseFloat(document.getElementById('cfg-temp').value),
     top_p: parseFloat(document.getElementById('cfg-topp').value),
     max_output_tokens: parseInt(document.getElementById('cfg-maxtok').value),
@@ -3808,36 +3822,48 @@ async function undoSplit() {
 }
 
 // Header shown above the per-paper log, holding the Split Entry control.
-function splitPanelHtml() {
+function adminHeading(title, first) {
+  return `<div class="subheading-block" style="margin:${first ? '4px' : '26px'} 0 12px">${esc(title)}</div>`;
+}
+
+function splitPanelBody() {
   const isSub = !!hfEntry.parent;
   const line = isSub
     ? `This entry is <strong>${esc(hfEntry.label||'a study')}</strong> of a split paper.`
     : 'If this paper reports more than one study or sample, split it into entries that are coded separately.';
-  return `<div style="padding:12px 4px 0">
-    <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+  return `<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px">
       <div style="flex:1;font-size:12px;line-height:1.6;color:var(--dim)">${line}</div>
       <button class="btn btn-secondary btn-sm" onclick="openSplitDialog()">⑃ Split Entry…</button>
-    </div>
-  </div>`;
+    </div>`;
 }
 
+// The Study Admin tab: what you can change about this entry, then its edit history.
 async function renderPaperLog() {
   const area = document.getElementById('hf-form-area');
+  area.innerHTML = `<div style="padding:12px 4px 40px">
+    ${adminHeading('Study Administration', true)}
+    ${splitPanelBody()}
+    ${adminHeading('Edit Log')}
+    <div id="admin-log-body" style="font-size:12px;color:var(--dim)">Loading…</div>
+  </div>`;
+  const body = () => document.getElementById('admin-log-body');
+
   if (!currentProj || !currentProj.audit_log_enabled) {
-    area.innerHTML = splitPanelHtml() + `<div style="padding:4px 20px 24px;color:var(--dim);font-size:12px;line-height:1.7">
+    body().innerHTML = `<div style="line-height:1.7">
       Audit log is not enabled for this project.<br>
       Enable it in <strong>Settings → Audit Log</strong> to track per-field edit history.
     </div>`;
     return;
   }
-  area.innerHTML = '<div class="empty">Loading…</div>';
-  const r = await fetch(`${API}/runs/${hfRunId}/human/paper/${encodeURIComponent(hfCurrentPdf)}/log`);
-  if (!r.ok) { area.innerHTML = '<div class="empty">Failed to load log.</div>'; return; }
+
+  const pdf = hfCurrentPdf;
+  const r = await fetch(`${API}/runs/${hfRunId}/human/paper/${encodeURIComponent(pdf)}/log`);
+  if (!body() || hfCurrentPdf !== pdf) return;   // moved on while it loaded
+  if (!r.ok) { body().textContent = 'Failed to load the edit log.'; return; }
   const entries = await r.json();
-  if (!entries.length) {
-    area.innerHTML = splitPanelHtml() + '<div class="empty">No edits recorded yet.</div>';
-    return;
-  }
+  if (!body() || hfCurrentPdf !== pdf) return;
+  if (!entries.length) { body().textContent = 'No edits recorded yet.'; return; }
+
   const rows = entries.map(e => {
     const isStatus = e.qname === '_status';
     return `<tr>
@@ -3848,8 +3874,7 @@ async function renderPaperLog() {
       <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.new_answer||'')}">${esc(e.new_answer||'—')}</td>
     </tr>`;
   }).join('');
-  area.innerHTML = splitPanelHtml() + `<div style="padding:0 4px 40px">
-    <div style="overflow-x:auto">
+  body().innerHTML = `<div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--s2);border-radius:8px;overflow:hidden">
         <thead><tr style="background:var(--s3);color:var(--dim)">
           <th style="padding:6px 8px;text-align:left;font-weight:500">Time</th>
@@ -3861,8 +3886,7 @@ async function renderPaperLog() {
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <div style="font-size:10px;color:var(--dim);margin-top:6px;text-align:right">${entries.length} edit${entries.length===1?'':'s'}</div>
-  </div>`;
+    <div style="font-size:10px;color:var(--dim);margin-top:6px;text-align:right">${entries.length} edit${entries.length===1?'':'s'}</div>`;
 }
 
 // ── RIS abstract fill ──
@@ -4125,6 +4149,51 @@ async function runExport() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ══════════════════════════════════════════════════════════
+// Secret inputs (API keys)
+// ══════════════════════════════════════════════════════════
+// Chrome offers to save any <input type="password"> to the password manager, and
+// pairs it with the nearest text box — which is why it kept asking to store the
+// API key under the model name. The field is a plain text input masked with CSS,
+// so no browser ever sees a credential to save, autofill or sync.
+
+const SECRET_CSS = !!(window.CSS && CSS.supports && CSS.supports('-webkit-text-security', 'disc'));
+
+// Firefox has no -webkit-text-security: hold the stored key out of the DOM instead
+// and show dots until the user reveals or retypes it.
+function secretMaskFallback(el) {
+  if (SECRET_CSS || !el.value) return;
+  el.dataset.secret = el.value;
+  el.value = '•'.repeat(Math.min(el.dataset.secret.length, 40));
+  el.addEventListener('input', function drop() {
+    delete el.dataset.secret;
+    el.removeEventListener('input', drop);
+  });
+}
+
+function toggleSecret(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (SECRET_CSS) { el.classList.toggle('revealed'); return; }
+  if (el.dataset.secret !== undefined) { el.value = el.dataset.secret; delete el.dataset.secret; }
+  else secretMaskFallback(el);
+}
+
+function secretGet(id) {
+  const el = document.getElementById(id);
+  if (!el) return '';
+  return (el.dataset.secret !== undefined ? el.dataset.secret : el.value).trim();
+}
+
+function secretSet(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  delete el.dataset.secret;
+  el.classList.remove('revealed');
+  el.value = val || '';
+  secretMaskFallback(el);
 }
 
 // ══════════════════════════════════════════════════════════
