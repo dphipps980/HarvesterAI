@@ -1075,157 +1075,6 @@ def _explode_group_cols(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
-def _unique_label(lbl: str, fi, used: set) -> str:
-    """Keep one block label per source column so exploded names never collide.
-
-    Columns whose block could not be resolved all fall back to 'PO'/'SO' — tag those
-    with their field index ('PO#44') so each still points back at one question.
-    """
-    cand = lbl
-    if cand in used and fi is not None:
-        cand = f"{lbl}#{fi}"
-    n = 2
-    while cand in used:
-        cand = f"{lbl}.{n}"; n += 1
-    used.add(cand); return cand
-
-
-def _explode_outcome_cols(df: "pd.DataFrame", blocks: Optional[dict] = None) -> "pd.DataFrame":
-    """Expand POutcomeSpecifier/SOutcomeSpecifier and xPO_/xSO_GMeansTable JSON columns.
-
-    `blocks` maps a column name to (outcome block, field index) as declared by the
-    extractor — e.g. ("PO3", 59). Without it we fall back to guessing primary/secondary
-    from the question text, which cannot tell two secondary blocks apart.
-    """
-    blocks = blocks or {}
-    def _try_json(v):
-        if not isinstance(v, str) or not v.strip(): return None
-        try: return json.loads(v)
-        except (TypeError, ValueError): return None
-
-    def _is_outcomespec(v):
-        """List of {id, name, type} dicts — no 'role' key (distinguishes from GroupSpecifier)."""
-        p = _try_json(v)
-        return isinstance(p, list) and bool(p) and isinstance(p[0], dict) and "name" in p[0] and "role" not in p[0]
-
-    def _is_xo_gmeans(v):
-        """Outer dict keyed by outcome id, each value is a GMeansTable {timepoints, data} dict."""
-        p = _try_json(v)
-        if not isinstance(p, dict): return False
-        return any(isinstance(val, dict) and "timepoints" in val for val in p.values())
-
-    def parse_outcomes(val):
-        p = _try_json(val)
-        return [o for o in p if isinstance(o, dict)] if isinstance(p, list) else []
-
-    # Collect specifier columns and xO GMeansTable columns
-    outcome_spec_cols = []   # (col, label_prefix)  e.g. ("POutcomeSpecifier_col", "PO")
-    xo_gmt_cols = []         # (col, label_prefix)
-    # Separate namespaces: a block's specifier and its means table share a label
-    # on purpose ("O_PO3_1_Name" vs "O_PO3<outcome id>_IG_M__Pre_Means").
-    used_spec: set = set()
-    used_gmt: set = set()
-
-    spec_cands, gmt_cands = [], []   # (col, block or None, field index or None)
-    for col in df.columns:
-        non_null = df[col].dropna()
-        if non_null.empty: continue
-        sample = non_null.iloc[0]
-        blk, fi = blocks.get(col, (None, None))
-        if _is_outcomespec(sample):
-            spec_cands.append((col, blk, fi))
-        elif _is_xo_gmeans(sample):
-            gmt_cands.append((col, blk, fi))
-
-    # Label the columns whose block the extractor confirmed first, so a column left
-    # to the primary/secondary guess below can never take a real block's label.
-    for cands, out, used, guess in (
-        (spec_cands, outcome_spec_cols, used_spec,
-         lambda c: "SO" if "secondary" in c.lower() or c.lower().startswith("so") else "PO"),
-        (gmt_cands, xo_gmt_cols, used_gmt,
-         lambda c: "SO" if "xso" in c.lower() else "PO"),
-    ):
-        labelled = {}
-        for col, blk, fi in cands:
-            if blk: labelled[col] = _unique_label(blk, fi, used)
-        for col, blk, fi in cands:
-            if not blk: labelled[col] = _unique_label(guess(col), fi, used)
-        out.extend((col, labelled[col]) for col, _, _ in cands)
-
-    if not outcome_spec_cols:
-        return df
-
-    # Build a per-paper outcome lookup from all specifier columns
-    all_paper_outcomes = {}  # col → {idx: [outcome_dicts]}
-    for os_col, lbl in outcome_spec_cols:
-        raw = df[os_col].to_dict()
-        paper_outcomes = {idx: parse_outcomes(raw.get(idx, "")) for idx in df.index}
-        all_paper_outcomes[os_col] = (paper_outcomes, lbl)
-
-        # Explode specifier → O_PO_1_Name, O_PO_1_Type, ...
-        os_pos = df.columns.get_loc(os_col)
-        df = df.drop(columns=[os_col])
-        max_outcomes = max((len(v) for v in paper_outcomes.values()), default=0)
-        insert_offset = 0
-        for i in range(max_outcomes):
-            for field in ("name", "type"):
-                col_name = f"O_{lbl}_{i+1}_{field.capitalize()}"
-                vals = [
-                    paper_outcomes.get(idx, [])[i].get(field, "") if i < len(paper_outcomes.get(idx, [])) else ""
-                    for idx in df.index
-                ]
-                _insert_unique(df, os_pos + insert_offset, col_name, vals)
-                insert_offset += 1
-
-    # Explode xPO_/xSO_GMeansTable columns → per-outcome per-group M/SD columns
-    for xo_col, lbl in xo_gmt_cols:
-        xo_raw = df[xo_col].to_dict()
-
-        # Find the corresponding outcome specifier for group lookup
-        # (use GroupSpecifier for group roles — already in all_paper_outcomes from _explode_group_cols)
-        all_outcome_ids, all_tps_by_oid = [], {}
-        for idx, v in xo_raw.items():
-            p = _try_json(v)
-            if not isinstance(p, dict): continue
-            for oid, gmeans in p.items():
-                if not isinstance(gmeans, dict): continue
-                if oid not in all_outcome_ids: all_outcome_ids.append(oid)
-                for tp in gmeans.get("timepoints", []):
-                    all_tps_by_oid.setdefault(oid, [])
-                    if tp not in all_tps_by_oid[oid]: all_tps_by_oid[oid].append(tp)
-
-        if not all_outcome_ids: continue
-
-        xo_pos = df.columns.get_loc(xo_col)
-        df = df.drop(columns=[xo_col])
-
-        xo_base = _DISAMBIG_RE.sub("", str(xo_col))
-        new_cols = []
-        for oid in all_outcome_ids:
-            for grp_prefix, stat in [("IG","M"),("IG","SD"),("CG","M"),("CG","SD")]:
-                for tp in all_tps_by_oid.get(oid, []):
-                    new_cols.append((f"O_{lbl}{oid}_{grp_prefix}_{stat}__{tp}_{xo_base}", oid, grp_prefix, tp, stat))
-
-        for insert_i, (col_name, oid, grp_prefix, tp, stat) in enumerate(new_cols):
-            vals = []
-            for idx in df.index:
-                p = _try_json(xo_raw.get(idx, ""))
-                cell = ""
-                if isinstance(p, dict):
-                    omeans = p.get(str(oid), {})
-                    if isinstance(omeans, dict):
-                        # xPO_/xSO_ GMeans data is keyed by group id (numeric), not group role
-                        for gdata in omeans.get("data", {}).values():
-                            if isinstance(gdata, dict):
-                                cell = gdata.get(f"{tp}_{stat}", "")
-                                # TODO: filter by group role once GroupSpecifier data is cross-referenced
-                                break
-                vals.append(cell)
-            _insert_unique(df, xo_pos + insert_i, col_name, vals)
-
-    return df
-
-
 def _explode_cortable_cols(df: "pd.DataFrame") -> "pd.DataFrame":
     """Expand CorTable JSON columns into one column per construct-pair.
 
@@ -1550,7 +1399,7 @@ def export_project(proj_id: str,
                     # "Means", a "Describe the measure", ...), so key the pivot on a
                     # name made unique per field — otherwise the blocks collapse into
                     # one column and all but the first are dropped.
-                    block_by_col, col_keys = _wide_col_keys(df_h, proj_id)
+                    _blocks, col_keys = _wide_col_keys(df_h, proj_id)
                     df_h["col"] = col_keys
                     df_wide_h = df_h.pivot_table(
                         index=["pdf_filename","run_id"], columns="col", values="answer", aggfunc="first"
@@ -1563,7 +1412,9 @@ def export_project(proj_id: str,
                     df_wide_h["status_log"] = sl_series.reindex(pairs).values
                     df_wide_h.insert(1, "run", df_wide_h.pop("run_id").map(run_label))
                     df_wide_h = _explode_group_cols(df_wide_h)
-                    df_wide_h = _explode_outcome_cols(df_wide_h, block_by_col)
+                    # Outcome specifiers and xPO_/xSO_ means tables stay as raw JSON:
+                    # the exploder gave every control column the intervention values.
+                    # See OUTCOME_EXPLODE_NOTES.md before bringing it back.
                     df_wide_h = _explode_cortable_cols(df_wide_h)
                     _sanitize_df(df_wide_h).to_excel(writer, sheet_name="Human_Wide", index=False)
                     sheets_written += 1
