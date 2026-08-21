@@ -38,6 +38,7 @@ from database import (
     human_last_coders,
     paper_lock_acquire, paper_lock_release, paper_lock_get,
     bib_clear, bib_upsert_batch, bib_list, bib_get, bib_get_by_file,
+    bib_sub_entries, bib_apply_split, paper_parent,
     match_filename_by_bib,
     user_list, user_add, user_add_with_password, user_get_by_name,
     user_set_role, user_set_password, user_list_with_roles, user_delete,
@@ -547,7 +548,8 @@ def _resolve_pdf_by_bib(proj_id: str, safe_name: str):
 
 @app.get("/pdfs/{proj_id}/{filename}")
 def serve_project_pdf(proj_id: str, filename: str):
-    safe_name = os.path.basename(filename)
+    # Sub-entries of a split paper share the paper's PDF.
+    safe_name = os.path.basename(paper_parent(filename))
     path = PDF_DIR / proj_id / safe_name
     try:
         exists = path.exists()
@@ -729,7 +731,8 @@ def create_human_run(proj_id: str, body: HumanRunCreate):
         raise HTTPException(400, "No bibliography found — upload a RIS file in the Configure tab first")
 
     run_id = str(uuid.uuid4())
-    run_create(run_id, proj_id, body.name, "human", len(existing_bib),
+    codeable = [b for b in existing_bib if not b.get("is_container")]
+    run_create(run_id, proj_id, body.name, "human", len(codeable),
                ai_run_ref=body.ai_run_ref)
     return {"run_id": run_id}
 
@@ -771,6 +774,10 @@ def get_human_run_papers(run_id: str):
         fn = b["pdf_filename"]
         papers.append({**b, "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""), "last_coder": last_coders.get(fn, "")})
         known_names.discard(fn)
+    # Sub-entries of a split paper follow their container in the list
+    papers.sort(key=lambda p: (p.get("parent_pdf") or p["pdf_filename"],
+                               1 if p.get("parent_pdf") else 0,
+                               p.get("entry_order") or 0))
 
     # Any extra filenames (human results that aren't in bib)
     for fn in known_names:
@@ -778,6 +785,40 @@ def get_human_run_papers(run_id: str):
                         "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""), "last_coder": last_coders.get(fn, "")})
 
     return papers
+
+class SplitEntry(BaseModel):
+    key: Optional[str] = None      # existing sub-entry, or None to create one
+    label: str = ""
+
+
+class SplitRequest(BaseModel):
+    entries: List[SplitEntry] = []  # wanted state, in order; empty undoes the split
+
+
+# NOTE: like /log below, this must be declared BEFORE get_paper_form so the greedy
+# {pdf_filename:path} converter does not swallow the trailing "/split".
+@app.post("/api/runs/{run_id}/human/paper/{pdf_filename:path}/split")
+def split_paper_entry(run_id: str, pdf_filename: str, body: SplitRequest):
+    """Split a paper that reports several studies into separately coded sub-entries."""
+    run = run_get(run_id)
+    if not run: raise HTTPException(404)
+    proj_id = run["project_id"]
+    parent = paper_parent(pdf_filename)
+    try:
+        subs = bib_apply_split(proj_id, parent,
+                               [{"key": e.key, "label": e.label} for e in body.entries])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"parent": parent, "entries": subs}
+
+
+@app.get("/api/runs/{run_id}/human/paper/{pdf_filename:path}/split")
+def get_paper_entries(run_id: str, pdf_filename: str):
+    run = run_get(run_id)
+    if not run: raise HTTPException(404)
+    return {"parent": paper_parent(pdf_filename),
+            "entries": bib_sub_entries(run["project_id"], paper_parent(pdf_filename))}
+
 
 # NOTE: this must be declared BEFORE get_paper_form — that route's greedy
 # {pdf_filename:path} converter would otherwise swallow the trailing "/log"
@@ -806,14 +847,16 @@ def get_paper_form(run_id: str, pdf_filename: str):
     # Human answers already saved
     human_answers = human_results_for_pdf(run_id, pdf_filename)
 
-    # AI answers for ShowWith — from referenced run, then any run as fallback
+    # AI answers for ShowWith — from referenced run, then any run as fallback.
+    # A sub-entry has no AI run of its own; it reads the paper's.
+    ai_key = paper_parent(pdf_filename)
     ai_run_ref = run.get("ai_run_ref") or None
-    ai_answers = ai_results_for_pdf(proj_id, pdf_filename, run_id=ai_run_ref)
+    ai_answers = ai_results_for_pdf(proj_id, ai_key, run_id=ai_run_ref)
     if not ai_answers and bib:
         ai_answers = ai_results_for_pdf_by_bib(proj_id, bib, run_id=ai_run_ref)
     # If still nothing, search across all AI runs (handles papers only in test run)
     if not ai_answers:
-        ai_answers = ai_results_for_pdf(proj_id, pdf_filename, run_id=None)
+        ai_answers = ai_results_for_pdf(proj_id, ai_key, run_id=None)
     if not ai_answers and bib:
         ai_answers = ai_results_for_pdf_by_bib(proj_id, bib, run_id=None)
 
@@ -824,6 +867,10 @@ def get_paper_form(run_id: str, pdf_filename: str):
         "human_answers": human_answers,   # {field_index_str: answer_json}
         "ai_answers": ai_answers,          # {question_num: answer_text}
         "paper_status": get_paper_status(run_id, pdf_filename),
+        "entry_label": (bib or {}).get("entry_label", ""),
+        "parent_pdf": (bib or {}).get("parent_pdf", ""),
+        "is_container": bool((bib or {}).get("is_container")),
+        "entries": bib_sub_entries(proj_id, paper_parent(pdf_filename)),
     }
 
 
@@ -926,7 +973,10 @@ def release_lock(run_id: str, pdf_filename: str, coder: str = Query("")):
 def get_status_summary(run_id: str):
     run = run_get(run_id)
     if not run: raise HTTPException(404)
-    total = run["pdf_count"]
+    # Splitting a paper changes how many entries there are to code, so count the
+    # bibliography rather than the number of PDFs the run started with.
+    codeable = [b for b in bib_list(run["project_id"]) if not b.get("is_container")]
+    total = len(codeable) or run["pdf_count"]
     statuses = human_paper_statuses(run_id)
     done         = sum(1 for s in statuses.values() if s == "done")
     needs_review = sum(1 for s in statuses.values() if s == "needs_review")
@@ -1351,6 +1401,11 @@ def export_project(proj_id: str,
             if hr_rows:
                 df_all = pd.DataFrame(hr_rows)
                 df_all.insert(1, "run", df_all["run_id"].map(run_label))
+                # A split paper's studies are stored under their own keys; report the
+                # paper and the study in separate columns.
+                entry = (df_all.pop("entry_label") if "entry_label" in df_all.columns
+                         else pd.Series("", index=df_all.index))
+                df_all.insert(2, "entry", entry.fillna(""))
 
                 def decode_ans(v):
                     try:
@@ -1391,7 +1446,9 @@ def export_project(proj_id: str,
 
                 if fmt in ("long", "both"):
                     drop = [] if include_bib else [c for c in HUM_BIB + ["abstract"] if c in df_h.columns]
-                    _sanitize_df(df_h.drop(columns=drop)).to_excel(writer, sheet_name="Human_Long", index=False)
+                    df_long_h = df_h.drop(columns=drop).copy()
+                    df_long_h["pdf_filename"] = df_long_h["pdf_filename"].map(paper_parent)
+                    _sanitize_df(df_long_h).to_excel(writer, sheet_name="Human_Long", index=False)
                     sheets_written += 1
 
                 if fmt in ("wide", "both"):
@@ -1411,6 +1468,9 @@ def export_project(proj_id: str,
                     df_wide_h["log"]        = log_series.reindex(pairs).values
                     df_wide_h["status_log"] = sl_series.reindex(pairs).values
                     df_wide_h.insert(1, "run", df_wide_h.pop("run_id").map(run_label))
+                    entry_by_key = df_h.groupby("pdf_filename")["entry"].first()
+                    df_wide_h.insert(1, "entry", df_wide_h["pdf_filename"].map(entry_by_key).fillna(""))
+                    df_wide_h["pdf_filename"] = df_wide_h["pdf_filename"].map(paper_parent)
                     df_wide_h = _explode_group_cols(df_wide_h)
                     # Outcome specifiers and xPO_/xSO_ means tables stay as raw JSON:
                     # the exploder gave every control column the intervention values.

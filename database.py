@@ -228,6 +228,20 @@ def init_db():
         ignore_duplicate_column=True,
     )
 
+    # Migration: split entries — a paper that reports several studies becomes a
+    # container whose sub-entries are coded separately.
+    for _col, _decl in (
+        ("parent_pdf",  "TEXT DEFAULT ''"),
+        ("entry_label", "TEXT DEFAULT ''"),
+        ("entry_order", "INTEGER DEFAULT 0"),
+        ("is_container", "INTEGER DEFAULT 0"),
+    ):
+        _run_migration(
+            f"ALTER TABLE bibliography ADD COLUMN {_col} {_decl}",
+            f"add bibliography.{_col}",
+            ignore_duplicate_column=True,
+        )
+
     # Migration: add paper_locks table if not present
     with get_db() as conn:
         conn.execute("""
@@ -609,7 +623,7 @@ def human_results_for_export(project_id, run_id=None):
     with get_db() as conn:
         rows = conn.execute(f"""
             SELECT h.run_id, h.pdf_filename, h.field_index, h.qname, h.question_text, h.answer,
-                   h.coder, h.updated_at,
+                   h.coder, h.updated_at, b.entry_label,
                    b.title, b.authors, b.journal, b.year, b.doi, b.abstract
             FROM human_results h
             LEFT JOIN bibliography b ON b.project_id=h.project_id AND b.pdf_filename=h.pdf_filename
@@ -636,6 +650,154 @@ def bib_upsert_batch(project_id, entries: list):
              for e in entries]
         )
         conn.commit()
+
+SUB_SEP = "::"
+
+
+def paper_parent(pdf_filename: str) -> str:
+    """The paper a sub-entry belongs to ('X.pdf::s2' -> 'X.pdf'); unchanged otherwise."""
+    return (pdf_filename or "").split(SUB_SEP, 1)[0]
+
+
+def bib_sub_entries(project_id, parent):
+    """Sub-entries of one paper, in display order."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bibliography WHERE project_id=? AND parent_pdf=? "
+            "ORDER BY entry_order, pdf_filename",
+            (project_id, parent)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _entry_answer_count(conn, project_id, key):
+    row = conn.execute(
+        "SELECT COUNT(*) c FROM human_results WHERE project_id=? AND pdf_filename=?",
+        (project_id, key)
+    ).fetchone()
+    return row["c"] if row else 0
+
+
+def _move_entry_rows(conn, project_id, src, dst):
+    """Move one entry's answers and edit history to another key."""
+    conn.execute("UPDATE human_results SET pdf_filename=? WHERE project_id=? AND pdf_filename=?",
+                 (dst, project_id, src))
+    conn.execute("UPDATE audit_log SET pdf_filename=? WHERE project_id=? AND pdf_filename=?",
+                 (dst, project_id, src))
+    conn.execute("DELETE FROM paper_locks WHERE pdf_filename=?", (src,))
+
+
+def _next_sub_index(conn, project_id, parent):
+    """One past the highest sub-entry number this paper has ever used."""
+    prefix = f"{parent}{SUB_SEP}s"
+    used = set()
+    for sql, params in (
+        ("SELECT pdf_filename n FROM bibliography WHERE project_id=? AND pdf_filename LIKE ?",
+         (project_id, prefix + "%")),
+        ("SELECT DISTINCT pdf_filename n FROM human_results WHERE project_id=? AND pdf_filename LIKE ?",
+         (project_id, prefix + "%")),
+        ("SELECT DISTINCT pdf_filename n FROM audit_log WHERE project_id=? AND pdf_filename LIKE ?",
+         (project_id, prefix + "%")),
+    ):
+        for r in conn.execute(sql, params):
+            tail = r["n"][len(prefix):]
+            if tail.isdigit():
+                used.add(int(tail))
+    return max(used) + 1 if used else 1
+
+
+def bib_apply_split(project_id, parent, entries):
+    """Create, rename, reorder and remove the sub-entries of one paper.
+
+    `entries` is the wanted state in display order: [{"key": <existing key or None>,
+    "label": str}]. An empty list undoes the split. Answers follow their entry — the
+    paper's own answers move into the first sub-entry when it is first split, and back
+    to the paper when the split is undone.
+
+    Raises ValueError if that would discard someone's coding.
+    """
+    parent = paper_parent(parent)
+    with get_db() as conn:
+        prow = conn.execute(
+            "SELECT * FROM bibliography WHERE project_id=? AND pdf_filename=?",
+            (project_id, parent)
+        ).fetchone()
+        if prow is None:
+            # Paper only known from its answers — give it a bibliography row to hang on.
+            conn.execute(
+                "INSERT INTO bibliography (project_id, pdf_filename) VALUES (?,?)",
+                (project_id, parent)
+            )
+            prow = conn.execute(
+                "SELECT * FROM bibliography WHERE project_id=? AND pdf_filename=?",
+                (project_id, parent)
+            ).fetchone()
+        prow = dict(prow)
+        if prow.get("parent_pdf"):
+            raise ValueError("This entry is already part of a split paper")
+
+        existing = {r["pdf_filename"]: r for r in bib_sub_entries(project_id, parent)}
+        wanted_keys = {e.get("key") for e in entries if e.get("key")}
+        unknown = wanted_keys - set(existing)
+        if unknown:
+            raise ValueError(f"Unknown sub-entry: {sorted(unknown)[0]}")
+
+        # Undo the split
+        if not entries:
+            coded = [k for k in existing if _entry_answer_count(conn, project_id, k)]
+            if len(coded) > 1:
+                raise ValueError(
+                    "More than one study has answers — clear all but one before undoing the split")
+            if coded:
+                _move_entry_rows(conn, project_id, coded[0], parent)
+            for k in existing:
+                conn.execute("DELETE FROM bibliography WHERE project_id=? AND pdf_filename=?",
+                             (project_id, k))
+            conn.execute("UPDATE bibliography SET is_container=0 WHERE project_id=? AND pdf_filename=?",
+                         (project_id, parent))
+            conn.commit()
+            return []
+
+        for key in set(existing) - wanted_keys:
+            if _entry_answer_count(conn, project_id, key):
+                raise ValueError(
+                    f"'{existing[key]['entry_label'] or key}' has answers — clear them before removing it")
+            conn.execute("DELETE FROM bibliography WHERE project_id=? AND pdf_filename=?",
+                         (project_id, key))
+
+        first_split = not prow.get("is_container")
+        next_i = _next_sub_index(conn, project_id, parent)
+        carried = ("title", "authors", "journal", "year", "doi", "abstract", "pdf_rel_path")
+        result_keys = []
+        for order, e in enumerate(entries):
+            label = (e.get("label") or "").strip() or f"Study {order + 1}"
+            key = e.get("key")
+            if key:
+                conn.execute(
+                    "UPDATE bibliography SET entry_label=?, entry_order=? "
+                    "WHERE project_id=? AND pdf_filename=?",
+                    (label, order, project_id, key)
+                )
+            else:
+                key = f"{parent}{SUB_SEP}s{next_i}"
+                next_i += 1
+                cols = ", ".join(carried)
+                marks = ", ".join("?" * len(carried))
+                conn.execute(
+                    f"INSERT INTO bibliography (project_id, pdf_filename, parent_pdf, entry_label, "
+                    f"entry_order, is_container, {cols}) VALUES (?,?,?,?,?,0,{marks})",
+                    (project_id, key, parent, label, order, *[prow.get(c) or "" for c in carried])
+                )
+            result_keys.append(key)
+
+        if first_split:
+            # The paper's own answers belong to the first study listed.
+            _move_entry_rows(conn, project_id, parent, result_keys[0])
+        conn.execute("UPDATE bibliography SET is_container=1 WHERE project_id=? AND pdf_filename=?",
+                     (project_id, parent))
+        conn.commit()
+    return bib_sub_entries(project_id, parent)
+
 
 def bib_list(project_id):
     with get_db() as conn:

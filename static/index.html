@@ -18,6 +18,8 @@
   --border: #c8d0e8;
   --accent: #2563eb;
   --accent2: #6d28d9;
+  --accent-soft: rgba(37,99,235,.30);   /* linked-but-not-open cards */
+  --accent-ghost: rgba(37,99,235,.06);
   --green: #16a34a;
   --yellow: #b45309;
   --red: #dc2626;
@@ -35,6 +37,8 @@
   --border: #2d3347;
   --accent: #4a9eff;
   --accent2: #7c6af7;
+  --accent-soft: rgba(74,158,255,.32);   /* linked-but-not-open cards */
+  --accent-ghost: rgba(74,158,255,.09);
   --green: #3ecf8e;
   --yellow: #f5c842;
   --red: #f06060;
@@ -191,6 +195,21 @@ hr.info-div{border:none;border-top:1px solid var(--border)}
 .export-opt{padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap}
 .export-opt:hover{background:var(--s2)}
 .exp-check{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 0;cursor:pointer;line-height:1.5}
+.paper-card.is-sub{margin-left:14px;border-left:2px solid var(--border)}
+/* Split papers highlight in two tiers: the entry you have open takes the normal
+   active treatment, while the paper it belongs to and its sibling studies get a
+   softer tint so the family is visible without competing with it. */
+.paper-card.family{background:var(--accent-ghost);border-color:var(--accent-soft)}
+.paper-card.family.is-sub{border-left:3px solid var(--accent-soft)}
+.paper-card.family-head .entry-badge{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-ghost)}
+.paper-card.active,
+.paper-card.family.active{border-color:var(--accent);background:var(--s2);box-shadow:inset 3px 0 0 var(--accent)}
+.paper-card.family.active .entry-badge{background:var(--accent);color:#fff;border-color:var(--accent)}
+.paper-card.active.is-sub,
+.paper-card.family.active.is-sub{border-left:3px solid var(--accent);box-shadow:none}
+.entry-badge{font-size:9px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;flex-shrink:0}
+.split-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.split-row input{flex:1;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:12px}
 .exp-check input{margin:0;flex-shrink:0}
 .exp-note{font-size:11px;color:var(--dim);margin-bottom:8px;line-height:1.5}
 .exp-sub{color:var(--dim);font-size:11px}
@@ -1042,6 +1061,29 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
   </div>
 </div>
 
+<!-- Split entry modal -->
+<div class="modal-overlay hidden" id="split-modal" onclick="if(event.target===this)closeSplitDialog()">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-hdr">
+      <div class="modal-hdr-title">⑃ Split Entry</div>
+      <button class="btn btn-ghost btn-sm" onclick="closeSplitDialog()">✕ Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="exp-note" id="split-paper-name" style="font-size:12px;color:var(--text);margin-bottom:14px"></div>
+      <div class="exp-note" id="split-explainer"></div>
+      <div id="split-rows" style="margin:14px 0"></div>
+      <button class="btn btn-ghost btn-sm" onclick="splitAddRow()">＋ Add study</button>
+      <div id="split-error" style="margin-top:14px;font-size:12px;color:var(--red);display:none"></div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <button class="btn btn-ghost btn-sm" id="split-undo-btn" onclick="undoSplit()" style="display:none">Undo split</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-ghost btn-sm" onclick="closeSplitDialog()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="split-save-btn" onclick="saveSplit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Export modal -->
 <div class="modal-overlay hidden" id="export-modal" onclick="if(event.target===this)closeExportModal()">
   <div class="modal" style="max-width:620px">
@@ -1331,6 +1373,8 @@ let hfRunId = null;
 let hfRunData = null;
 let hfCurrentPdf = null;
 let hfCurrentBib = {};
+let hfEntry = {label:'', parent:'', isContainer:false, entries:[]};
+let splitDraft = [];   // [{key, label, answered}] while the dialog is open
 let hfFields = [];
 let hfHumanAnswers = {};
 let hfAiAnswers = {};
@@ -2361,19 +2405,40 @@ function filterHumanPapers() {
 function renderHumanPaperList(papers) {
   const el = document.getElementById('hf-paper-list');
   if(!papers.length){el.innerHTML='<div class="empty">No papers</div>';return;}
+  const subCounts = {};
+  papers.forEach(p => { if(p.parent_pdf) subCounts[p.parent_pdf] = (subCounts[p.parent_pdf]||0) + 1; });
+  // The paper the open entry belongs to — its whole family gets highlighted.
+  const activeFamily = hfCurrentPdf ? paperParent(hfCurrentPdf) : '';
   el.innerHTML = papers.map(p=>{
-    const label = p.title || p.pdf_filename;
+    const isSub = !!p.parent_pdf, isContainer = !!p.is_container;
+    // A study's own line names the study; the paper title moves to the meta line.
+    const label = isSub ? (p.entry_label || 'Study') : (p.title || p.pdf_filename);
+    const meta = isSub
+      ? (p.title || p.pdf_filename)
+      : `${esc(p.authors||'')} ${p.year?'('+p.year+')':''}`;
     const doi = p.doi ? `<a class="doi-btn" href="https://doi.org/${encodeURIComponent(p.doi)}" target="_blank" onclick="event.stopPropagation()">DOI ↗</a>` : '';
-    const dot = p.paper_status ? `<div class="status-dot" data-s="${p.paper_status}"></div>` : '';
-    return `<div class="paper-card ${p.pdf_filename===hfCurrentPdf?'active':''}" onclick="openPaper('${esc(p.pdf_filename)}')">
-      <div class="paper-info">
-        <div class="paper-title" style="display:flex;align-items:center;gap:5px">${dot}${esc(label)}</div>
-        <div class="paper-meta">${esc(p.authors||'')} ${p.year?'('+p.year+')':''}</div>
-      </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+    const dot = (!isContainer && p.paper_status) ? `<div class="status-dot" data-s="${p.paper_status}"></div>` : '';
+    const badge = isContainer
+      ? `<span class="entry-badge">${subCounts[p.pdf_filename]||0} studies</span>` : '';
+    const right = isContainer ? '' : `
         ${doi}
         <div class="paper-prog">${p.answered} ✓</div>
-        ${p.last_coder ? `<div style="font-size:9px;color:var(--dim);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px" title="${esc(p.last_coder)}">${esc(p.last_coder)}</div>` : ''}
+        ${p.last_coder ? `<div style="font-size:9px;color:var(--dim);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px" title="${esc(p.last_coder)}">${esc(p.last_coder)}</div>` : ''}`;
+    const inFamily = activeFamily && (isContainer || isSub) &&
+                     (p.parent_pdf === activeFamily || p.pdf_filename === activeFamily);
+    const cls = [
+      'paper-card',
+      isSub ? 'is-sub' : '',
+      inFamily ? 'family' : '',
+      (inFamily && isContainer) ? 'family-head' : '',
+      p.pdf_filename === hfCurrentPdf ? 'active' : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="${cls}" onclick="openPaper('${esc(p.pdf_filename)}')">
+      <div class="paper-info">
+        <div class="paper-title" style="display:flex;align-items:center;gap:5px">${dot}${esc(label)}${badge}</div>
+        <div class="paper-meta">${isSub ? esc(meta) : meta}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">${right}
       </div>
     </div>`;
   }).join('');
@@ -2395,9 +2460,13 @@ async function openPaper(pdfFilename) {
   hfAiAnswers = data.ai_answers || {};
   hfCurrentBib = data.bib || {};
   hfCurrentStatus = data.paper_status || '';
+  hfEntry = {label: data.entry_label||'', parent: data.parent_pdf||'',
+             isContainer: !!data.is_container, entries: data.entries||[]};
 
   // Header
-  document.getElementById('hf-paper-title').textContent = hfCurrentBib.title || pdfFilename;
+  const baseTitle = hfCurrentBib.title || paperParent(pdfFilename);
+  document.getElementById('hf-paper-title').textContent =
+    hfEntry.label ? `${baseTitle} — ${hfEntry.label}` : baseTitle;
   document.getElementById('hf-paper-meta').textContent =
     [hfCurrentBib.authors, hfCurrentBib.journal, hfCurrentBib.year].filter(Boolean).join(' · ');
   const doiBtn = document.getElementById('hf-doi-btn');
@@ -2410,9 +2479,16 @@ async function openPaper(pdfFilename) {
   const pdfBtn = document.getElementById('hf-pdf-btn');
   pdfBtn.style.display = hfCurrentBib.pdf_rel_path ? 'inline-flex' : 'none';
 
-  // Status buttons
-  document.getElementById('hf-status-btns').style.display = 'flex';
+  // A split paper is a container: its studies are coded, it is not.
+  document.getElementById('hf-status-btns').style.display = hfEntry.isContainer ? 'none' : 'flex';
   updateStatusButtons(hfCurrentStatus);
+
+  if (hfEntry.isContainer) {
+    document.getElementById('form-tabs').innerHTML = '';
+    renderContainerPane();
+    await loadHumanPapers();
+    return;
+  }
 
   renderFormTabs();
   fillRisAbstract(hfCurrentBib);
@@ -2447,7 +2523,7 @@ function renderFormTabs() {
   const tabsEl = document.getElementById('form-tabs');
   tabsEl.innerHTML = tabs.map((t,i)=>
     `<div class="form-tab ${i===0?'active':''}" data-tab="${esc(t)}" onclick="switchFormTab('${esc(t)}')">${esc(t)}</div>`
-  ).join('') + `<div class="form-tab" data-tab="__log__" onclick="switchFormTab('__log__')">Log</div>`;
+  ).join('') + `<div class="form-tab" data-tab="__admin__" onclick="switchFormTab('__admin__')">Study Admin</div>`;
   hfActiveTab = tabs[0]||null;
   renderFormPane();
 }
@@ -2465,7 +2541,7 @@ function renderFormPane() {
   // Preserve debounced edits before replacing the current form DOM.
   flushPendingSaves();
   if(!hfCurrentPdf){area.innerHTML='<div class="empty">Select a paper</div>';return;}
-  if(hfActiveTab === '__log__') { renderPaperLog(); return; }
+  if(hfActiveTab === '__admin__') { renderPaperLog(); return; }
   const fields = hfFields.filter(f=>f.tab===hfActiveTab);
   const bgFields = fields.filter(f=>f.qtype&&f.qtype.startsWith('BG_'));
   // Group xPO/xSO fields by numeric suffix: '' | '2' | '3' ...
@@ -3597,10 +3673,158 @@ function stopLockHeartbeat() {
 }
 
 // ── Per-paper audit log ──
+// ══════════════════════════════════════════════════════════
+// Split entry — papers that report several studies or samples
+// ══════════════════════════════════════════════════════════
+
+function paperParent(name) { return String(name||'').split('::')[0]; }
+
+// The container pane: a split paper is not coded itself, its studies are.
+function renderContainerPane() {
+  const area = document.getElementById('hf-form-area');
+  const rows = (hfEntry.entries||[]).map(e => {
+    const p = hfPapers.find(x => x.pdf_filename === e.pdf_filename) || {};
+    const status = p.paper_status ? `<div class="status-dot" data-s="${p.paper_status}"></div>` : '';
+    return `<div class="paper-card" onclick="openPaper('${esc(e.pdf_filename)}')">
+      <div class="paper-info">
+        <div class="paper-title" style="display:flex;align-items:center;gap:5px">${status}${esc(e.entry_label||'Study')}</div>
+        <div class="paper-meta">${p.answered ? p.answered + ' answers' : 'Not started'}</div>
+      </div>
+    </div>`;
+  }).join('');
+  area.innerHTML = `<div style="padding:16px 4px 40px">
+    <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:18px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">This paper is split into ${(hfEntry.entries||[]).length} studies</div>
+      <div style="font-size:12px;color:var(--dim);line-height:1.7">Coding happens in the studies below — the paper itself has no form. Open one to code it, or change the split.</div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="openSplitDialog()">⑃ Manage studies…</button>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+async function openSplitDialog() {
+  if (!hfCurrentPdf || !hfRunId) return;
+  const parent = hfEntry.parent || paperParent(hfCurrentPdf);
+  const r = await fetch(`${API}/runs/${hfRunId}/human/paper/${encodeURIComponent(parent)}/split`);
+  const data = r.ok ? await r.json() : {entries: []};
+  const existing = data.entries || [];
+  splitDraft = existing.map(e => {
+    const p = hfPapers.find(x => x.pdf_filename === e.pdf_filename) || {};
+    return {key: e.pdf_filename, label: e.entry_label || '', answered: p.answered || 0};
+  });
+  if (!splitDraft.length) {
+    // First split: the paper's own answers become Study 1.
+    splitDraft = [{key:null, label:'Study 1', answered:0}, {key:null, label:'Study 2', answered:0}];
+  }
+  const bibTitle = (hfCurrentBib.title || parent);
+  document.getElementById('split-paper-name').innerHTML = `<strong>${esc(bibTitle)}</strong>`;
+  document.getElementById('split-error').style.display = 'none';
+  document.getElementById('split-modal').classList.remove('hidden');
+  renderSplitRows();
+}
+
+function closeSplitDialog() {
+  document.getElementById('split-modal').classList.add('hidden');
+}
+
+function renderSplitRows() {
+  const wasSplit = (hfEntry.entries||[]).length > 0;
+  document.getElementById('split-explainer').textContent = wasSplit
+    ? 'Rename a study, add another, or remove one that has no answers yet.'
+    : 'Name each study reported in this paper. Answers already saved against the paper move to the first study.';
+  document.getElementById('split-rows').innerHTML = splitDraft.map((e, i) => `
+    <div class="split-row">
+      <input type="text" value="${esc(e.label)}" placeholder="Study ${i+1}"
+             oninput="splitDraft[${i}].label=this.value">
+      ${e.answered ? `<span class="exp-sub" title="Answers saved">${e.answered} ✓</span>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="splitRemoveRow(${i})" title="Remove">✕</button>
+    </div>`).join('');
+  document.getElementById('split-undo-btn').style.display = wasSplit ? '' : 'none';
+}
+
+function splitAddRow() {
+  splitDraft.push({key:null, label:`Study ${splitDraft.length+1}`, answered:0});
+  renderSplitRows();
+}
+
+function splitRemoveRow(i) {
+  const e = splitDraft[i];
+  if (e.answered && !confirm(`"${e.label}" has ${e.answered} answers saved. Remove it anyway?`)) return;
+  splitDraft.splice(i, 1);
+  renderSplitRows();
+}
+
+function splitError(msg) {
+  const el = document.getElementById('split-error');
+  el.textContent = msg;
+  el.style.display = msg ? '' : 'none';
+}
+
+async function applySplit(entries) {
+  const parent = hfEntry.parent || paperParent(hfCurrentPdf);
+  const btn = document.getElementById('split-save-btn');
+  btn.disabled = true;
+  splitError('');
+  try {
+    const r = await fetch(`${API}/runs/${hfRunId}/human/paper/${encodeURIComponent(parent)}/split`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({entries})
+    });
+    if (!r.ok) {
+      let msg = await r.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch(e) {}
+      splitError(msg);
+      return false;
+    }
+    const data = await r.json();
+    closeSplitDialog();
+    await loadHumanPapers();
+    // Land on the first study after a split, or on the paper once it is unsplit.
+    const next = (data.entries && data.entries.length) ? data.entries[0].pdf_filename : parent;
+    await openPaper(next);
+    return true;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function saveSplit() {
+  const entries = splitDraft
+    .map((e, i) => ({key: e.key, label: (e.label||'').trim() || `Study ${i+1}`}));
+  if (entries.length === 1) {
+    splitError('A split needs at least two studies — use Undo split to go back to one entry.');
+    return;
+  }
+  await applySplit(entries);
+}
+
+async function undoSplit() {
+  const coded = splitDraft.filter(e => e.answered);
+  const msg = coded.length
+    ? `Undo the split? Answers from "${coded[0].label}" move back to the paper.`
+    : 'Undo the split and go back to a single entry?';
+  if (!confirm(msg)) return;
+  await applySplit([]);
+}
+
+// Header shown above the per-paper log, holding the Split Entry control.
+function splitPanelHtml() {
+  const isSub = !!hfEntry.parent;
+  const line = isSub
+    ? `This entry is <strong>${esc(hfEntry.label||'a study')}</strong> of a split paper.`
+    : 'If this paper reports more than one study or sample, split it into entries that are coded separately.';
+  return `<div style="padding:12px 4px 0">
+    <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;font-size:12px;line-height:1.6;color:var(--dim)">${line}</div>
+      <button class="btn btn-secondary btn-sm" onclick="openSplitDialog()">⑃ Split Entry…</button>
+    </div>
+  </div>`;
+}
+
 async function renderPaperLog() {
   const area = document.getElementById('hf-form-area');
   if (!currentProj || !currentProj.audit_log_enabled) {
-    area.innerHTML = `<div style="padding:24px 20px;color:var(--dim);font-size:12px;line-height:1.7">
+    area.innerHTML = splitPanelHtml() + `<div style="padding:4px 20px 24px;color:var(--dim);font-size:12px;line-height:1.7">
       Audit log is not enabled for this project.<br>
       Enable it in <strong>Settings → Audit Log</strong> to track per-field edit history.
     </div>`;
@@ -3611,7 +3835,7 @@ async function renderPaperLog() {
   if (!r.ok) { area.innerHTML = '<div class="empty">Failed to load log.</div>'; return; }
   const entries = await r.json();
   if (!entries.length) {
-    area.innerHTML = '<div class="empty">No edits recorded yet.</div>';
+    area.innerHTML = splitPanelHtml() + '<div class="empty">No edits recorded yet.</div>';
     return;
   }
   const rows = entries.map(e => {
@@ -3624,7 +3848,7 @@ async function renderPaperLog() {
       <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.new_answer||'')}">${esc(e.new_answer||'—')}</td>
     </tr>`;
   }).join('');
-  area.innerHTML = `<div style="padding:12px 4px 40px">
+  area.innerHTML = splitPanelHtml() + `<div style="padding:0 4px 40px">
     <div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--s2);border-radius:8px;overflow:hidden">
         <thead><tr style="background:var(--s3);color:var(--dim)">
