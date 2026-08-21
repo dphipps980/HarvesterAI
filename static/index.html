@@ -190,6 +190,10 @@ hr.info-div{border:none;border-top:1px solid var(--border)}
 .doi-btn:hover{border-color:var(--accent);color:var(--accent)}
 .export-opt{padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap}
 .export-opt:hover{background:var(--s2)}
+.exp-check{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 0;cursor:pointer;line-height:1.5}
+.exp-check input{margin:0;flex-shrink:0}
+.exp-note{font-size:11px;color:var(--dim);margin-bottom:8px;line-height:1.5}
+.exp-sub{color:var(--dim);font-size:11px}
 
 /* ── Human extraction form ── */
 #v-human-form{overflow:hidden}
@@ -757,15 +761,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           <option value="ai">AI only</option>
           <option value="human">Human only</option>
         </select>
-        <div class="export-split proj-admin-only" style="position:relative;display:inline-flex">
-          <button class="btn btn-ghost btn-sm" onclick="exportProject('wide')" title="Export wide format">⬇ Export</button>
-          <button class="btn btn-ghost btn-sm" style="padding:0 5px;border-left:1px solid var(--border)" onclick="toggleExportMenu(event)" title="Export options">▾</button>
-          <div id="export-menu2" style="display:none;position:absolute;top:100%;right:0;background:var(--s1);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.15);z-index:200;min-width:160px;padding:4px 0">
-            <div class="export-opt" onclick="exportProject('long')">Long format</div>
-            <div class="export-opt" onclick="exportProject('wide')">Wide format</div>
-            <div class="export-opt" onclick="exportProject('both')">Both formats</div>
-          </div>
-        </div>
+        <button class="btn btn-ghost btn-sm proj-admin-only" onclick="openExportModal()" title="Choose formats, runs and filters">⬇ Export…</button>
       </div>
       <div id="human-progress-cards" class="progress-cards"></div>
       <div id="reviewer-breakdown-wrap"></div>
@@ -788,15 +784,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
         <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:18px 20px">
           <div style="font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:14px">Export &amp; Backup</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <div class="export-split proj-admin-only" style="position:relative;display:inline-flex">
-              <button class="btn btn-ghost btn-sm" onclick="exportProject('wide')" title="Export wide format">⬇ Export</button>
-              <button class="btn btn-ghost btn-sm" style="padding:0 5px;border-left:1px solid var(--border)" onclick="toggleExportMenu(event)" title="Export options">▾</button>
-              <div id="export-menu-manage" style="display:none;position:absolute;top:100%;left:0;background:var(--s1);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.15);z-index:200;min-width:160px;padding:4px 0">
-                <div class="export-opt" onclick="exportProject('long')">Long format</div>
-                <div class="export-opt" onclick="exportProject('wide')">Wide format</div>
-                <div class="export-opt" onclick="exportProject('both')">Both formats</div>
-              </div>
-            </div>
+            <button class="btn btn-ghost btn-sm proj-admin-only" onclick="openExportModal()" title="Choose formats, runs and filters">⬇ Export…</button>
             <button class="btn btn-ghost btn-sm proj-admin-only" onclick="backupProject()">⬇ Backup</button>
           </div>
         </div>
@@ -1050,6 +1038,64 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
         </div>
         <button class="btn btn-primary" style="width:100%" onclick="addProjectMember()">Add Member</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Export modal -->
+<div class="modal-overlay hidden" id="export-modal" onclick="if(event.target===this)closeExportModal()">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-hdr">
+      <div class="modal-hdr-title">⬇ Export Data</div>
+      <button class="btn btn-ghost btn-sm" onclick="closeExportModal()">✕ Close</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Format</div>
+        <label class="exp-check"><input type="checkbox" id="exp-fmt-wide" checked> Wide — one row per paper, one column per question</label>
+        <label class="exp-check"><input type="checkbox" id="exp-fmt-long"> Long — one row per answer</label>
+      </div>
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Include</div>
+        <label class="exp-check"><input type="checkbox" id="exp-src-human" checked> Human coding</label>
+        <label class="exp-check"><input type="checkbox" id="exp-src-ai" checked> AI extraction</label>
+        <label class="exp-check"><input type="checkbox" id="exp-bib" checked> Bibliography columns <span class="exp-sub">(title, authors, journal, year, doi)</span></label>
+      </div>
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Runs</div>
+        <div class="exp-note">Tick the runs to export — none ticked exports them all. Each run gets its own row per paper.</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <button class="btn btn-ghost btn-sm" onclick="expSetRuns(true)">Select all</button>
+          <button class="btn btn-ghost btn-sm" onclick="expSetRuns(false)">Clear</button>
+        </div>
+        <div id="exp-run-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
+      </div>
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Paper status</div>
+        <div class="exp-note">Keep papers whose human decision is one of:</div>
+        <label class="exp-check"><input type="checkbox" class="exp-status-cb" value="done" checked> ✓ Done</label>
+        <label class="exp-check"><input type="checkbox" class="exp-status-cb" value="needs_review" checked> ⚑ Needs Review</label>
+        <label class="exp-check"><input type="checkbox" class="exp-status-cb" value="incomplete" checked> ⏳ Incomplete</label>
+        <label class="exp-check"><input type="checkbox" class="exp-status-cb" value="none" checked> No decision yet</label>
+      </div>
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Filter by answer</div>
+        <div class="exp-note">Keep only papers a coder gave one of these answers to.</div>
+        <select id="exp-filter-q" onchange="expFilterQuestionChanged()" style="width:100%;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:12px">
+          <option value="">No answer filter</option>
+        </select>
+        <div id="exp-filter-opts"></div>
+      </div>
+
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0">
+      <div id="exp-status" style="flex:1;font-size:12px;color:var(--dim)"></div>
+      <button class="btn btn-primary" id="exp-go-btn" onclick="runExport()">⬇ Export</button>
     </div>
   </div>
 </div>
@@ -3722,47 +3768,139 @@ async function loadResults() {
   }
 }
 
-function toggleExportMenu(e) {
-  e.stopPropagation();
-  // close any other open menu first
-  ['export-menu','export-menu2','export-menu-manage'].forEach(id => {
-    const m = document.getElementById(id);
-    if(m && m !== e.currentTarget.nextElementSibling) m.style.display = 'none';
-  });
-  const menu = e.currentTarget.nextElementSibling;
-  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
-}
-document.addEventListener('click', () => {
-  ['export-menu','export-menu2','export-menu-manage'].forEach(id => {
-    const m = document.getElementById(id); if(m) m.style.display = 'none';
-  });
-});
+// ══════════════════════════════════════════════════════════
+// Export
+// ══════════════════════════════════════════════════════════
 
-async function exportProject(fmt='both') {
+function openExportModal() {
   if(!currentProjId){alert('Select a project first');return;}
-  // close menus
-  document.getElementById('export-menu') && (document.getElementById('export-menu').style.display='none');
-  document.getElementById('export-menu2') && (document.getElementById('export-menu2').style.display='none');
-  const runId = document.getElementById('results-run-filter')?.value||'';
-  const source = document.getElementById('results-source-filter')?.value||'both';
-  const params = new URLSearchParams({source, fmt});
-  if(runId) params.set('run_id',runId);
-  const r = await fetch(`${API}/projects/${currentProjId}/export?${params}`);
-  if(r.status === 401){
-    // Opening the export URL directly in a tab sends no token; so does a signed-out session.
-    alert('Your session has expired. Please sign in again, then retry the export.');
-    if(AUTH_MODE === 'login') logout();
-    return;
+  document.getElementById('exp-status').textContent = '';
+  document.getElementById('export-modal').classList.remove('hidden');
+  fillExportRuns();
+  fillExportFilterQuestions();
+}
+
+function closeExportModal() {
+  document.getElementById('export-modal').classList.add('hidden');
+}
+
+async function fillExportRuns() {
+  const el = document.getElementById('exp-run-list');
+  el.innerHTML = '<div class="exp-sub">Loading runs…</div>';
+  let runs = [];
+  try { runs = await (await fetch(`${API}/projects/${currentProjId}/runs`)).json(); }
+  catch(e) { el.innerHTML = '<div class="exp-sub">Could not load runs</div>'; return; }
+  if(!runs.length){ el.innerHTML = '<div class="exp-sub">No runs yet</div>'; return; }
+  el.innerHTML = runs.map(r => `
+    <label class="exp-check">
+      <input type="checkbox" class="exp-run" value="${esc(r.id)}">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</span>
+      <span class="exp-sub">${esc(r.type)}${r.created_at ? ' · ' + esc(r.created_at.slice(0,10)) : ''}</span>
+    </label>`).join('');
+}
+
+function expSetRuns(on) {
+  document.querySelectorAll('#exp-run-list .exp-run').forEach(c => c.checked = on);
+}
+
+// Questions that offer a fixed set of answers — the only ones worth filtering on.
+function expFilterableQuestions() {
+  let fields = [];
+  try { fields = JSON.parse(currentProj?.extractor_json || '[]'); } catch(e) { fields = []; }
+  return fields.filter(f => (f.answer_options||[]).length && (f.question||'').trim());
+}
+
+// Same block tags the export columns use, so repeated questions are tellable apart.
+function expOutcomeBlock(qtype) {
+  const m = /^x(P|S)O(\d*)_/.exec(qtype||'') || /^(P|S)OutcomeSpecifier(\d*)$/.exec(qtype||'');
+  return m ? `${m[1]}O${m[2]}` : '';
+}
+
+function fillExportFilterQuestions() {
+  const sel = document.getElementById('exp-filter-q');
+  const qs = expFilterableQuestions();
+  const times = {};
+  qs.forEach(f => times[f.question] = (times[f.question]||0) + 1);
+  sel.innerHTML = '<option value="">No answer filter</option>' +
+    qs.map(f => {
+      const tag = times[f.question] > 1 ? ` [${expOutcomeBlock(f.qtype) || '#' + f.field_index}]` : '';
+      const label = (f.question.length > 80 ? f.question.slice(0,80)+'…' : f.question) + tag;
+      return `<option value="${f.field_index}" data-q="${esc(f.question)}">${esc(label)}</option>`;
+    }).join('');
+  document.getElementById('exp-filter-opts').innerHTML = '';
+}
+
+function expFilterQuestionChanged() {
+  const fi = document.getElementById('exp-filter-q').value;
+  const wrap = document.getElementById('exp-filter-opts');
+  if(!fi){ wrap.innerHTML = ''; return; }
+  const f = expFilterableQuestions().find(x => String(x.field_index) === String(fi));
+  const opts = (f && f.answer_options) || [];
+  wrap.innerHTML = '<div class="exp-note" style="margin-top:10px">Answers to keep — none ticked means no filter:</div>' +
+    opts.map(o => `<label class="exp-check"><input type="checkbox" class="exp-fval" value="${esc(o)}"> ${esc(o)}</label>`).join('');
+}
+
+async function runExport() {
+  const fmts = [];
+  if(document.getElementById('exp-fmt-wide').checked) fmts.push('wide');
+  if(document.getElementById('exp-fmt-long').checked) fmts.push('long');
+  if(!fmts.length){ alert('Pick at least one format — wide or long.'); return; }
+  const wantAI = document.getElementById('exp-src-ai').checked;
+  const wantHuman = document.getElementById('exp-src-human').checked;
+  if(!wantAI && !wantHuman){ alert('Pick at least one of human coding or AI extraction.'); return; }
+  const statuses = [...document.querySelectorAll('.exp-status-cb:checked')].map(c => c.value);
+  if(!statuses.length){ alert('Pick at least one paper status, or every paper is filtered out.'); return; }
+
+  const params = new URLSearchParams({
+    source: (wantAI && wantHuman) ? 'both' : (wantAI ? 'ai' : 'human'),
+    fmt: fmts.length === 2 ? 'both' : fmts[0],
+    include_bib: document.getElementById('exp-bib').checked ? 'true' : 'false',
+  });
+  document.querySelectorAll('#exp-run-list .exp-run:checked').forEach(c => params.append('run_ids', c.value));
+  if(statuses.length < 4) statuses.forEach(v => params.append('statuses', v));
+  const fq = document.getElementById('exp-filter-q');
+  const fvals = [...document.querySelectorAll('.exp-fval:checked')].map(c => c.value);
+  if(fq.value && fvals.length){
+    params.set('filter_field', fq.value);
+    // Full question text, so answers saved under an older field index still match.
+    params.set('filter_question', fq.options[fq.selectedIndex].dataset.q || '');
+    fvals.forEach(v => params.append('filter_values', v));
   }
-  if(!r.ok){alert('Export failed: '+(await r.text()));return;}
-  const blob = await r.blob();
-  const cd = r.headers.get('content-disposition')||'';
-  const fnMatch = cd.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-  const filename = fnMatch ? fnMatch[1].replace(/['"]/g,'') : `export_${currentProjId}.xlsx`;
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
+
+  const btn = document.getElementById('exp-go-btn');
+  const stat = document.getElementById('exp-status');
+  btn.disabled = true;
+  stat.textContent = 'Building the workbook — this can take a minute on a large review…';
+  try {
+    const r = await fetch(`${API}/projects/${currentProjId}/export?${params}`);
+    if(r.status === 401){
+      // Opening the export URL directly in a tab sends no token; so does a signed-out session.
+      alert('Your session has expired. Please sign in again, then retry the export.');
+      if(AUTH_MODE === 'login') logout();
+      return;
+    }
+    if(!r.ok){
+      stat.textContent = '';
+      let msg = await r.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch(e) {}
+      alert('Export failed: ' + msg);
+      return;
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get('content-disposition')||'';
+    const fnMatch = cd.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+    const filename = fnMatch ? fnMatch[1].replace(/['"]/g,'') : `export_${currentProjId}.xlsx`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    stat.textContent = `Downloaded ${filename}`;
+  } catch(e) {
+    stat.textContent = '';
+    alert('Export failed: ' + e);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ══════════════════════════════════════════════════════════

@@ -1361,47 +1361,147 @@ def _wide_col_keys(df_h: "pd.DataFrame", proj_id: str):
     return block_by_col, keys
 
 
+_ALL_STATUSES = ("done", "needs_review", "incomplete", "none")
+
+
+def _answer_choices(raw) -> list:
+    """The scalar values a stored answer represents, for matching a filter choice."""
+    if raw is None or raw == "":
+        return []
+    try:
+        val = json.loads(raw)
+    except (TypeError, ValueError):
+        return [str(raw)]
+    if isinstance(val, list):
+        out = []
+        for v in val:
+            # Outcome specifiers store a list of {id, name, type} — match on those too,
+            # so "outcomes of type X" is a usable filter.
+            if isinstance(v, dict):
+                out += [str(x) for x in v.values() if not isinstance(x, (dict, list))]
+            elif not isinstance(v, list):
+                out.append(str(v))
+        return out
+    if isinstance(val, dict):
+        return [str(v) for v in val.values() if not isinstance(v, (dict, list))]
+    return [str(val)]
+
+
+def _papers_passing(hr_rows, statuses, filter_field, filter_question, filter_values):
+    """Papers matching the status / answer filters, or None when neither is active."""
+    keep = None
+    if statuses and set(statuses) != set(_ALL_STATUSES):
+        wanted = set(statuses)
+        # Status is per run, so a paper counts if any exported run gives it a wanted
+        # one; "none" covers a run where the paper was never given a status.
+        status_by_pair = {}
+        for r in hr_rows:
+            pair = (r["pdf_filename"], r.get("run_id"))
+            if r["field_index"] == -1 and (r.get("answer") or ""):
+                status_by_pair[pair] = r["answer"]
+            else:
+                status_by_pair.setdefault(pair, "none")
+        keep = {pdf for (pdf, _), st in status_by_pair.items() if st in wanted}
+
+    if filter_values and (filter_field is not None or filter_question):
+        wanted_vals = set(filter_values)
+        matched = set()
+        for r in hr_rows:
+            # Match on the field index and on the question text, so answers saved
+            # before the extractor was last edited are still found.
+            hit = (filter_field is not None and r["field_index"] == filter_field) or \
+                  (bool(filter_question) and r.get("qname") == filter_question)
+            if hit and wanted_vals & set(_answer_choices(r.get("answer"))):
+                matched.add(r["pdf_filename"])
+        keep = matched if keep is None else (keep & matched)
+    return keep
+
+
+def _run_labels(proj_id: str) -> dict:
+    """{run id: display label}, disambiguated when two runs share a name."""
+    runs = run_list(proj_id)
+    times = {}
+    for r in runs:
+        times[r["name"]] = times.get(r["name"], 0) + 1
+    return {r["id"]: (r["name"] if times[r["name"]] == 1 else f"{r['name']} ({r['id'][:8]})")
+            for r in runs}
+
+
 @app.get("/api/projects/{proj_id}/export")
 def export_project(proj_id: str,
                    run_id: Optional[str] = None,
+                   run_ids: Optional[List[str]] = Query(None),
                    source: str = "both",
-                   fmt: str = "both"):
-    """Generate and stream an Excel export on demand from the database."""
-    if not project_get(proj_id): raise HTTPException(404)
+                   fmt: str = "both",
+                   include_bib: bool = True,
+                   statuses: Optional[List[str]] = Query(None),
+                   filter_field: Optional[int] = None,
+                   filter_question: Optional[str] = None,
+                   filter_values: Optional[List[str]] = Query(None)):
+    """Generate and stream an Excel export on demand from the database.
+
+    `run_ids` selects any number of runs (`run_id` stays for older callers) and the wide
+    sheets carry one row per paper per run, so no run overwrites another. Papers can be
+    narrowed to a set of human statuses and to the answers given to one question.
+    """
+    proj = project_get(proj_id)
+    if not proj: raise HTTPException(404)
+    runs = [r for r in (run_ids or ([run_id] if run_id else [])) if r]
+    labels = _run_labels(proj_id)
+    def run_label(rid): return labels.get(rid, rid or "")
+
+    filters_on = bool(filter_values and (filter_field is not None or filter_question)) \
+                 or bool(statuses and set(statuses) != set(_ALL_STATUSES))
+    hr_rows = None
+    if source in ("human", "both") or filters_on:
+        hr_rows = human_results_for_export(proj_id, runs)
+    allowed = _papers_passing(hr_rows, statuses, filter_field, filter_question,
+                              filter_values) if filters_on else None
+
+    AI_BIB  = ["title","authors","journal","year","doi","abstract"]
+    HUM_BIB = ["title","authors","journal","year","doi"]
 
     output = io.BytesIO()
     sheets_written = 0
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
         if source in ("ai", "both"):
-            ai_rows = ai_results_for_export(proj_id, run_id)
+            ai_rows = ai_results_for_export(proj_id, runs)
+            if allowed is not None:
+                ai_rows = [r for r in ai_rows if r["pdf_filename"] in allowed]
             if ai_rows:
                 df_long = pd.DataFrame(ai_rows)
+                df_long.insert(1, "run", df_long["run_id"].map(run_label))
+                bib_cols = AI_BIB if include_bib else []
                 if fmt in ("long", "both"):
-                    _sanitize_df(df_long).to_excel(writer, sheet_name="AI_Long", index=False)
+                    drop = [] if include_bib else [c for c in AI_BIB if c in df_long.columns]
+                    _sanitize_df(df_long.drop(columns=drop)).to_excel(writer, sheet_name="AI_Long", index=False)
                     sheets_written += 1
 
                 if fmt in ("wide", "both"):
-                    proj = project_get(proj_id)
                     names = {int(k):v for k,v in json.loads(proj.get("question_names_json","{}")).items()}
-                    df_long["Q_num"] = df_long.groupby("pdf_filename").cumcount() + 1
-                    df_wide = df_long.pivot(index="pdf_filename", columns="Q_num", values="answer").reset_index()
-                    bib_cols = ["title","authors","journal","year","doi","abstract"]
+                    df_long["Q_num"] = df_long.groupby(["pdf_filename","run_id"]).cumcount() + 1
+                    df_wide = df_long.pivot(index=["pdf_filename","run_id"], columns="Q_num",
+                                            values="answer").reset_index()
+                    pairs = pd.MultiIndex.from_frame(df_wide[["pdf_filename","run_id"]])
                     for col in bib_cols:
-                        df_wide[col] = df_long.groupby("pdf_filename")[col].first().reindex(df_wide["pdf_filename"]).values
+                        df_wide[col] = df_long.groupby(["pdf_filename","run_id"])[col].first().reindex(pairs).values
+                    df_wide["run"] = df_wide["run_id"].map(run_label)
 
                     q_cols = sorted(c for c in df_wide.columns if isinstance(c, int))
                     for q in q_cols:
                         df_wide.rename(columns={q: names.get(q, f"Q{q}")}, inplace=True)
-                    col_order = ["pdf_filename"] + bib_cols + [names.get(q, f"Q{q}") for q in q_cols]
+                    col_order = ["pdf_filename","run"] + bib_cols + [names.get(q, f"Q{q}") for q in q_cols]
                     df_wide = df_wide[[c for c in col_order if c in df_wide.columns]]
                     _sanitize_df(df_wide).to_excel(writer, sheet_name="AI_Wide", index=False)
                     sheets_written += 1
 
         if source in ("human", "both"):
-            hr_rows = human_results_for_export(proj_id, run_id)
+            if allowed is not None:
+                hr_rows = [r for r in hr_rows if r["pdf_filename"] in allowed]
             if hr_rows:
                 df_all = pd.DataFrame(hr_rows)
+                df_all.insert(1, "run", df_all["run_id"].map(run_label))
 
                 def decode_ans(v):
                     try:
@@ -1421,26 +1521,28 @@ def export_project(proj_id: str,
                     parts = []
                     for coder, cg in edits.groupby("coder"):
                         if not coder: continue
-                        labels = cg["qname"].where(cg["qname"] != "", "Field_" + cg["field_index"].astype(str)).tolist()
+                        edited = cg["qname"].where(cg["qname"] != "", "Field_" + cg["field_index"].astype(str)).tolist()
                         ts = cg["updated_at"].max()
-                        parts.append(f"{coder} edited {', '.join(labels)} on {ts}")
+                        parts.append(f"{coder} edited {', '.join(edited)} on {ts}")
                     return "; ".join(parts)
 
                 def build_status_log(grp):
-                    s = grp[grp["field_index"] == -1]
-                    if s.empty: return ""
-                    row = s.iloc[0]
+                    st = grp[grp["field_index"] == -1]
+                    if st.empty: return ""
+                    row = st.iloc[0]
                     return " — ".join(p for p in [row.get("answer",""), row.get("coder",""), row.get("updated_at","")] if p)
 
-                log_series = df_all.groupby("pdf_filename").apply(build_log).rename("log")
-                sl_series  = df_all.groupby("pdf_filename").apply(build_status_log).rename("status_log")
+                # Grouped by run as well as paper, so each run keeps its own log.
+                log_series = df_all.groupby(["pdf_filename","run_id"]).apply(build_log).rename("log")
+                sl_series  = df_all.groupby(["pdf_filename","run_id"]).apply(build_status_log).rename("status_log")
 
                 # Now filter to answer rows only
                 df_h = df_all[df_all["field_index"] >= 0].copy()
                 df_h["answer"] = df_h["answer"].apply(decode_ans)
 
                 if fmt in ("long", "both"):
-                    _sanitize_df(df_h).to_excel(writer, sheet_name="Human_Long", index=False)
+                    drop = [] if include_bib else [c for c in HUM_BIB + ["abstract"] if c in df_h.columns]
+                    _sanitize_df(df_h.drop(columns=drop)).to_excel(writer, sheet_name="Human_Long", index=False)
                     sheets_written += 1
 
                 if fmt in ("wide", "both"):
@@ -1451,23 +1553,25 @@ def export_project(proj_id: str,
                     block_by_col, col_keys = _wide_col_keys(df_h, proj_id)
                     df_h["col"] = col_keys
                     df_wide_h = df_h.pivot_table(
-                        index="pdf_filename", columns="col", values="answer", aggfunc="first"
+                        index=["pdf_filename","run_id"], columns="col", values="answer", aggfunc="first"
                     ).reset_index()
-                    bib_cols = ["title","authors","journal","year","doi"]
-                    for col in bib_cols:
+                    pairs = pd.MultiIndex.from_frame(df_wide_h[["pdf_filename","run_id"]])
+                    for col in (HUM_BIB if include_bib else []):
                         if col in df_h.columns:
-                            df_wide_h[col] = df_h.groupby("pdf_filename")[col].first().reindex(df_wide_h["pdf_filename"]).values
-                    df_wide_h["log"]        = log_series.reindex(df_wide_h["pdf_filename"]).values
-                    df_wide_h["status_log"] = sl_series.reindex(df_wide_h["pdf_filename"]).values
+                            df_wide_h[col] = df_h.groupby(["pdf_filename","run_id"])[col].first().reindex(pairs).values
+                    df_wide_h["log"]        = log_series.reindex(pairs).values
+                    df_wide_h["status_log"] = sl_series.reindex(pairs).values
+                    df_wide_h.insert(1, "run", df_wide_h.pop("run_id").map(run_label))
                     df_wide_h = _explode_group_cols(df_wide_h)
                     df_wide_h = _explode_outcome_cols(df_wide_h, block_by_col)
                     df_wide_h = _explode_cortable_cols(df_wide_h)
                     _sanitize_df(df_wide_h).to_excel(writer, sheet_name="Human_Wide", index=False)
                     sheets_written += 1
 
-        proj = project_get(proj_id)
-        if proj and proj.get("audit_log_enabled"):
-            audit_rows = audit_log_for_export(proj_id, run_id)
+        if proj.get("audit_log_enabled"):
+            audit_rows = audit_log_for_export(proj_id, runs)
+            if allowed is not None:
+                audit_rows = [r for r in audit_rows if r.get("pdf_filename") in allowed]
             if audit_rows:
                 _sanitize_df(pd.DataFrame(audit_rows)).to_excel(writer, sheet_name="Audit_Log", index=False)
                 sheets_written += 1
@@ -1477,7 +1581,7 @@ def export_project(proj_id: str,
             pd.DataFrame({"message": ["No data found for the selected filters."]}).to_excel(writer, sheet_name="No Data", index=False)
 
     if sheets_written == 0:
-        raise HTTPException(404, "No data found for the selected run and source filters")
+        raise HTTPException(404, "No data found for the selected runs, sources and filters")
 
     output.seek(0)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")

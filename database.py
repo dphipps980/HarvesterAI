@@ -440,11 +440,23 @@ def ai_results_for_pdf(project_id, pdf_filename, run_id=None):
             """, (project_id, pdf_filename, project_id, pdf_filename)).fetchall()
         return {r["question_num"]: r["answer"] for r in rows}
 
+def _run_filter(col, run_id):
+    """SQL fragment + params restricting `col` to one run id or a list of them."""
+    if not run_id:
+        return "", []
+    ids = [run_id] if isinstance(run_id, str) else [r for r in run_id if r]
+    if not ids:
+        return "", []
+    if len(ids) == 1:
+        return f" AND {col}=?", [ids[0]]
+    return f" AND {col} IN ({','.join('?' * len(ids))})", list(ids)
+
+
 def ai_results_for_export(project_id, run_id=None):
     cond = "a.project_id=?"
     params = [project_id]
-    if run_id:
-        cond += " AND a.run_id=?"; params.append(run_id)
+    frag, fp = _run_filter("a.run_id", run_id)
+    cond += frag; params += fp
     with get_db() as conn:
         rows = conn.execute(f"""
             SELECT a.run_id, a.pdf_filename, a.question_num, a.question_text, a.qname, a.answer,
@@ -592,8 +604,8 @@ def paper_lock_get(run_id, pdf_filename):
 def human_results_for_export(project_id, run_id=None):
     cond = "h.project_id=?"
     params = [project_id]
-    if run_id:
-        cond += " AND h.run_id=?"; params.append(run_id)
+    frag, fp = _run_filter("h.run_id", run_id)
+    cond += frag; params += fp
     with get_db() as conn:
         rows = conn.execute(f"""
             SELECT h.run_id, h.pdf_filename, h.field_index, h.qname, h.question_text, h.answer,
@@ -868,8 +880,8 @@ def audit_log_append(project_id, run_id, pdf_filename, field_index, qname, old_a
 def audit_log_for_export(project_id, run_id=None):
     cond = "project_id=?"
     params = [project_id]
-    if run_id:
-        cond += " AND run_id=?"; params.append(run_id)
+    frag, fp = _run_filter("run_id", run_id)
+    cond += frag; params += fp
     with get_db() as conn:
         rows = conn.execute(
             f"SELECT * FROM audit_log WHERE {cond} ORDER BY changed_at", params
