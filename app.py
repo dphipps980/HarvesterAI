@@ -32,10 +32,11 @@ from database import (
     project_member_add, project_member_remove, project_member_set_role,
     project_members_list, get_project_role, project_list_for_user,
     run_create, run_get, run_list, run_delete, run_finish, run_update_ai_ref, run_append_log,
+    run_update_settings, human_answers_for_run,
     ai_results_for_pdf, ai_results_for_pdf_by_bib, ai_results_for_export,
     human_result_save, human_results_for_pdf, human_results_progress,
     human_paper_statuses, human_paper_statuses_by_coder, get_paper_status, human_results_for_export,
-    human_last_coders,
+    human_last_coders, human_decision_coders,
     paper_lock_acquire, paper_lock_release, paper_lock_get,
     bib_clear, bib_upsert_batch, bib_list, bib_get, bib_get_by_file,
     bib_sub_entries, bib_apply_split, paper_parent,
@@ -702,10 +703,92 @@ async def stream_run(run_id: str, token: Optional[str] = None):
 # Human Runs
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _deciders(run_id: str) -> dict:
+    """{pdf_filename: coder} for who settled each paper in a run.
+
+    The reviewer who set the status owns the decision; if nobody did, credit whoever
+    edited last so the card still says something useful.
+    """
+    coders = human_last_coders(run_id)
+    coders.update({k: v for k, v in human_decision_coders(run_id).items() if v})
+    return coders
+
+
+def _is_blank_answer(raw) -> bool:
+    """True for the several shapes an unanswered field takes in storage."""
+    return raw is None or str(raw).strip() in ("", "null", '""', "[]", "{}")
+
+
+def _carry_over_answers(run: dict, pdf_filename: str) -> int:
+    """Copy the carried-over fields from the source run into this one for one paper.
+
+    Runs when a paper is opened rather than only at creation, because a verification
+    run follows its source live — papers that qualify later must be seeded too. Only
+    fills fields that are still empty here, so it never overwrites the verifier, and
+    keeps the original reviewer as the author of the value it copied.
+    """
+    if (run.get("run_mode") or "clean") != "verification" or not run.get("source_run_id"):
+        return 0
+    try:
+        fields = {int(f) for f in json.loads(run.get("carry_fields_json") or "[]")}
+    except (TypeError, ValueError):
+        fields = set()
+    if not fields:
+        return 0
+
+    mine = human_results_for_pdf(run["id"], pdf_filename)          # keyed by int
+    source = human_answers_for_run(run["source_run_id"], pdf_filename)
+    copied = 0
+    for fi in sorted(fields):
+        if not _is_blank_answer(mine.get(fi)):   # the verifier already has something here
+            continue
+        src = source.get(str(fi))
+        if not src or _is_blank_answer(src.get("answer")):
+            continue
+        human_result_save(run["id"], run["project_id"], pdf_filename, fi,
+                          src.get("qname", ""), src.get("question_text", ""),
+                          src["answer"], coder=src.get("coder", ""))
+        copied += 1
+    return copied
+
+
+def _verification_papers(run: dict) -> Optional[set]:
+    """Papers a verification run covers: those in its source run that match its filter.
+
+    Returns None for a clean run, so callers fall back to the whole bibliography.
+    """
+    if (run.get("run_mode") or "clean") != "verification":
+        return None
+    source = run.get("source_run_id") or ""
+    if not source:
+        return None
+    rows = human_results_for_export(run["project_id"], source)
+    try:
+        values = json.loads(run.get("filter_values_json") or "[]")
+    except (TypeError, ValueError):
+        values = []
+    field = run.get("filter_field")
+    field = None if field is None or int(field) < 0 else int(field)
+    question = run.get("filter_question") or ""
+    if not values or (field is None and not question):
+        # No answer filter: every paper the source run touched
+        return {r["pdf_filename"] for r in rows}
+    return _papers_passing(rows, None, field, question, values) or set()
+
+
 class HumanRunCreate(BaseModel):
     name: str
     pdf_filenames: List[str]   # just the filenames — matched against bibliography
     ai_run_ref: Optional[str] = None
+    # Verification runs: a second pass over an earlier extraction
+    run_mode: str = "clean"                       # clean | verification
+    source_run_id: Optional[str] = None
+    filter_field: Optional[int] = None
+    filter_question: Optional[str] = None
+    filter_values: List[str] = []
+    show_ai: bool = True
+    show_original: bool = False
+    carry_fields: List[int] = []   # answers copied from the source run, e.g. group names
 
 @app.post("/api/projects/{proj_id}/runs/human", status_code=201)
 def create_human_run(proj_id: str, body: HumanRunCreate):
@@ -732,9 +815,62 @@ def create_human_run(proj_id: str, body: HumanRunCreate):
 
     run_id = str(uuid.uuid4())
     codeable = [b for b in existing_bib if not b.get("is_container")]
-    run_create(run_id, proj_id, body.name, "human", len(codeable),
-               ai_run_ref=body.ai_run_ref)
-    return {"run_id": run_id}
+    settings = {}
+    total = len(codeable)
+    if body.run_mode == "verification":
+        if not body.source_run_id:
+            raise HTTPException(400, "Pick the extraction run to verify")
+        src = run_get(body.source_run_id)
+        if not src or src["project_id"] != proj_id:
+            raise HTTPException(400, "That extraction run is not part of this project")
+        settings = {
+            "run_mode": "verification",
+            "source_run_id": body.source_run_id,
+            "filter_field": -1 if body.filter_field is None else body.filter_field,
+            "filter_question": body.filter_question or "",
+            "filter_values_json": json.dumps(body.filter_values or []),
+            "show_ai": 1 if body.show_ai else 0,
+            "show_original": 1 if body.show_original else 0,
+            "carry_fields_json": json.dumps(sorted(set(body.carry_fields or []))),
+        }
+        papers = _verification_papers({**settings, "project_id": proj_id})
+        total = len(papers or [])
+        if not total:
+            raise HTTPException(400, "No papers in that run match the filter")
+    else:
+        settings = {"show_ai": 1 if body.show_ai else 0, "show_original": 0}
+
+    run_create(run_id, proj_id, body.name, "human", total, ai_run_ref=body.ai_run_ref)
+    run_update_settings(run_id, settings)
+    return {"run_id": run_id, "pdf_count": total}
+
+
+class VerificationPreview(BaseModel):
+    source_run_id: str
+    filter_field: Optional[int] = None
+    filter_question: Optional[str] = None
+    filter_values: List[str] = []
+
+
+@app.post("/api/projects/{proj_id}/runs/human/preview")
+def preview_verification_run(proj_id: str, body: VerificationPreview):
+    """How many papers a verification run would cover, before creating it."""
+    if not project_get(proj_id): raise HTTPException(404)
+    src = run_get(body.source_run_id)
+    if not src or src["project_id"] != proj_id:
+        raise HTTPException(400, "That extraction run is not part of this project")
+    papers = _verification_papers({
+        "run_mode": "verification", "project_id": proj_id,
+        "source_run_id": body.source_run_id,
+        "filter_field": -1 if body.filter_field is None else body.filter_field,
+        "filter_question": body.filter_question or "",
+        "filter_values_json": json.dumps(body.filter_values or []),
+    }) or set()
+    coders = _deciders(body.source_run_id)
+    by_coder = {}
+    for pdf in papers:
+        by_coder[coders.get(pdf) or "(unknown)"] = by_coder.get(coders.get(pdf) or "(unknown)", 0) + 1
+    return {"count": len(papers), "by_coder": by_coder}
 
 @app.patch("/api/runs/{run_id}/ai_run_ref")
 def update_run_ai_ref(run_id: str, body: dict):
@@ -769,10 +905,31 @@ def get_human_run_papers(run_id: str):
     statuses = human_paper_statuses(run_id)
     last_coders = human_last_coders(run_id)
 
+    # A verification run only covers the papers its source run matched, and each
+    # card names whoever made the final call there so verifiers can avoid their own.
+    covered = _verification_papers(run)
+    dropped: set = set()
+    if covered is not None:
+        # The list follows the source run live, so a paper can stop matching after
+        # someone has verified it. Keep anything already worked on — losing sight of
+        # a reviewer's answers is worse than showing a paper that no longer qualifies.
+        worked = set(progress) | {k for k, v in statuses.items() if v}
+        dropped = worked - covered
+        covered = covered | worked
+    source_coders = _deciders(run["source_run_id"]) if covered is not None else {}
+    source_statuses = human_paper_statuses(run["source_run_id"]) if covered is not None else {}
+
     papers = []
     for b in bib:
         fn = b["pdf_filename"]
-        papers.append({**b, "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""), "last_coder": last_coders.get(fn, "")})
+        if covered is not None and fn not in covered:
+            known_names.discard(fn)
+            continue
+        papers.append({**b, "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""),
+                       "last_coder": last_coders.get(fn, ""),
+                       "original_coder": source_coders.get(fn, ""),
+                       "original_status": source_statuses.get(fn, ""),
+                       "filter_dropped": fn in dropped})
         known_names.discard(fn)
     # Sub-entries of a split paper follow their container in the list
     papers.sort(key=lambda p: (p.get("parent_pdf") or p["pdf_filename"],
@@ -781,8 +938,14 @@ def get_human_run_papers(run_id: str):
 
     # Any extra filenames (human results that aren't in bib)
     for fn in known_names:
+        if covered is not None and fn not in covered:
+            continue
         papers.append({"pdf_filename": fn, "title":"", "authors":"", "doi":"",
-                        "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""), "last_coder": last_coders.get(fn, "")})
+                        "answered": progress.get(fn, 0), "paper_status": statuses.get(fn, ""),
+                        "last_coder": last_coders.get(fn, ""),
+                        "original_coder": source_coders.get(fn, ""),
+                        "original_status": source_statuses.get(fn, ""),
+                        "filter_dropped": fn in dropped})
 
     return papers
 
@@ -844,6 +1007,9 @@ def get_paper_form(run_id: str, pdf_filename: str):
     extractor = json.loads(proj.get("extractor_json","[]"))
     bib = bib_get(proj_id, pdf_filename)
 
+    # Seed anything this run carries over from the run it verifies, then read back
+    _carry_over_answers(run, pdf_filename)
+
     # Human answers already saved
     human_answers = human_results_for_pdf(run_id, pdf_filename)
 
@@ -867,6 +1033,12 @@ def get_paper_form(run_id: str, pdf_filename: str):
         "human_answers": human_answers,   # {field_index_str: answer_json}
         "ai_answers": ai_answers,          # {question_num: answer_text}
         "paper_status": get_paper_status(run_id, pdf_filename),
+        # A verification run shows the source run's answers beside each field.
+        "original_answers": (human_answers_for_run(run["source_run_id"], pdf_filename)
+                             if (run.get("run_mode") == "verification" and run.get("source_run_id")
+                                 and run.get("show_original")) else {}),
+        "original_coder": (_deciders(run["source_run_id"]).get(pdf_filename, "")
+                           if run.get("source_run_id") else ""),
         "entry_label": (bib or {}).get("entry_label", ""),
         "parent_pdf": (bib or {}).get("parent_pdf", ""),
         "is_container": bool((bib or {}).get("is_container")),
@@ -973,11 +1145,18 @@ def release_lock(run_id: str, pdf_filename: str, coder: str = Query("")):
 def get_status_summary(run_id: str):
     run = run_get(run_id)
     if not run: raise HTTPException(404)
-    # Splitting a paper changes how many entries there are to code, so count the
-    # bibliography rather than the number of PDFs the run started with.
-    codeable = [b for b in bib_list(run["project_id"]) if not b.get("is_container")]
-    total = len(codeable) or run["pdf_count"]
     statuses = human_paper_statuses(run_id)
+    covered = _verification_papers(run)
+    if covered is not None:
+        # A verification run covers a moving subset, so count it now rather than
+        # trusting the number stored when the run was created.
+        covered = covered | set(human_results_progress(run_id)) | {k for k, v in statuses.items() if v}
+        total = len(covered)
+    else:
+        # Splitting a paper changes how many entries there are to code, so count the
+        # bibliography rather than the number of PDFs the run started with.
+        codeable = [b for b in bib_list(run["project_id"]) if not b.get("is_container")]
+        total = len(codeable) or run["pdf_count"]
     done         = sum(1 for s in statuses.values() if s == "done")
     needs_review = sum(1 for s in statuses.values() if s == "needs_review")
     incomplete   = sum(1 for s in statuses.values() if s == "incomplete")

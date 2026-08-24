@@ -228,6 +228,24 @@ def init_db():
         ignore_duplicate_column=True,
     )
 
+    # Migration: verification runs — a second pass over an earlier extraction,
+    # narrowed by an answer given in it and showing that run's answers alongside.
+    for _col, _decl in (
+        ("run_mode",          "TEXT DEFAULT 'clean'"),      # clean | verification
+        ("source_run_id",     "TEXT DEFAULT ''"),           # the run being verified
+        ("filter_field",      "INTEGER DEFAULT -1"),
+        ("filter_question",   "TEXT DEFAULT ''"),
+        ("filter_values_json", "TEXT DEFAULT '[]'"),
+        ("show_ai",           "INTEGER DEFAULT 1"),
+        ("show_original",     "INTEGER DEFAULT 0"),
+        ("carry_fields_json", "TEXT DEFAULT '[]'"),   # fields copied from the source run
+    ):
+        _run_migration(
+            f"ALTER TABLE runs ADD COLUMN {_col} {_decl}",
+            f"add runs.{_col}",
+            ignore_duplicate_column=True,
+        )
+
     # Migration: split entries — a paper that reports several studies becomes a
     # container whose sub-entries are coded separately.
     for _col, _decl in (
@@ -329,6 +347,38 @@ def run_create(run_id, project_id, name, run_type, pdf_count, ai_run_ref=None):
             (run_id, project_id, name, run_type, "running", now, pdf_count, ai_run_ref)
         )
         conn.commit()
+
+_RUN_SETTINGS = ("run_mode", "source_run_id", "filter_field", "filter_question",
+                 "filter_values_json", "show_ai", "show_original", "carry_fields_json")
+
+
+def run_update_settings(run_id, fields: dict):
+    """Set the verification settings of a run. Unknown keys are ignored."""
+    cols = [(k, v) for k, v in (fields or {}).items() if k in _RUN_SETTINGS]
+    if not cols:
+        return
+    assign = ", ".join(f"{k}=?" for k, _ in cols)
+    with get_db() as conn:
+        conn.execute(f"UPDATE runs SET {assign} WHERE id=?", [v for _, v in cols] + [run_id])
+        conn.commit()
+
+
+def human_answers_for_run(run_id, pdf_filename):
+    """{field_index: {answer, coder, qname, question_text}} for one paper in one run.
+
+    Keyed by string index and including the status row (-1), so callers can both show
+    the original answers and copy them into another run.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT field_index, answer, coder, qname, question_text FROM human_results "
+            "WHERE run_id=? AND pdf_filename=?",
+            (run_id, pdf_filename)
+        ).fetchall()
+    return {str(r["field_index"]): {"answer": r["answer"], "coder": r["coder"],
+                                    "qname": r["qname"], "question_text": r["question_text"]}
+            for r in rows}
+
 
 def run_append_log(run_id, line):
     with get_db() as conn:
@@ -515,6 +565,21 @@ def human_results_progress(run_id):
             (run_id,)
         ).fetchall()
         return {r["pdf_filename"]: r["cnt"] for r in rows}
+
+def human_decision_coders(run_id):
+    """{pdf_filename: coder} for whoever set each paper's status in this run.
+
+    That is the person who made the final call, which is not always whoever touched
+    a field last — callers fall back to human_last_coders when there is no status.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT pdf_filename, coder FROM human_results "
+            "WHERE run_id=? AND field_index=-1 AND coder != ''",
+            (run_id,)
+        ).fetchall()
+    return {r["pdf_filename"]: r["coder"] for r in rows}
+
 
 def human_last_coders(run_id):
     """Return {pdf_filename: coder} for the most recent edit on each paper."""

@@ -109,6 +109,8 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);height:100vh
 .badge-complete{background:rgba(62,207,142,.15);color:var(--green)}
 .badge-failed{background:rgba(240,96,96,.15);color:var(--red)}
 .badge-cancelled{background:rgba(107,115,143,.15);color:var(--dim)}
+.badge-clean{background:rgba(107,115,143,.15);color:var(--dim)}
+.badge-verification{background:rgba(37,99,235,.14);color:var(--accent)}
 .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .dot-running{background:var(--yellow);animation:blink 1.2s infinite}
 .dot-complete{background:var(--green)}
@@ -247,6 +249,10 @@ hr.info-div{border:none;border-top:1px solid var(--border)}
 .field-label{font-size:12px;font-weight:500;margin-bottom:5px;line-height:1.4}
 .field-info{font-size:11px;color:var(--dim);margin-bottom:6px;line-height:1.5;background:var(--s2);padding:6px 8px;border-radius:5px;border-left:2px solid var(--border)}
 .field-ai{background:rgba(124,106,247,.08);border:1px solid rgba(124,106,247,.2);border-radius:6px;padding:8px 10px;margin-bottom:6px}
+.field-orig{background:rgba(62,207,142,.08);border:1px solid rgba(62,207,142,.25);border-radius:6px;padding:8px 10px;margin-bottom:6px}
+.field-orig-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--green);margin-bottom:4px;display:flex;gap:6px;align-items:baseline}
+.field-orig-answer{font-size:12px;color:var(--text);line-height:1.5;white-space:pre-wrap}
+.orig-coder{font-size:10px;color:var(--dim);text-transform:none;letter-spacing:0;font-weight:500}
 .field-ai-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);margin-bottom:4px}
 .field-ai-answer{font-size:12px;color:var(--text);line-height:1.5}
 .field-input input[type=text],.field-input textarea{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-family:var(--sans);font-size:12px;outline:none;transition:border-color .12s}
@@ -869,6 +875,11 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           </select>
           <input id="hf-search" class="hf-search" type="search" placeholder="Search…" oninput="filterHumanPapers()">
         </div>
+        <div class="hf-filter-row" id="hf-verify-row" style="display:none">
+          <label class="exp-check" style="font-size:11px" title="Papers you decided in the run being verified">
+            <input type="checkbox" id="hf-hide-mine" onchange="filterHumanPapers()"> Hide papers I coded
+          </label>
+        </div>
       </div>
       <div class="hf-paper-list" id="hf-paper-list"></div>
     </div>
@@ -1067,6 +1078,77 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
         </div>
         <button class="btn btn-primary" style="width:100%" onclick="addProjectMember()">Add Member</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- New human extraction modal -->
+<div class="modal-overlay hidden" id="newrun-modal" onclick="if(event.target===this)closeNewRunModal()">
+  <div class="modal" style="max-width:580px">
+    <div class="modal-hdr">
+      <div class="modal-hdr-title">＋ New Human Extraction</div>
+      <button class="btn btn-ghost btn-sm" onclick="closeNewRunModal()">✕ Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" style="margin-bottom:18px">
+        <label>Run name</label>
+        <input id="nr-name" type="text" placeholder="e.g. Verification pass" autocomplete="off">
+      </div>
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Type</div>
+        <div class="run-type-cards">
+          <button class="run-type-card selected" id="nr-card-clean" onclick="setRunMode('clean')">
+            <div class="run-type-card-icon">📄</div>
+            <div class="run-type-card-title">Clean Extraction</div>
+            <div class="run-type-card-desc">Every paper, coded from scratch</div>
+          </button>
+          <button class="run-type-card" id="nr-card-verification" onclick="setRunMode('verification')">
+            <div class="run-type-card-icon">🔍</div>
+            <div class="run-type-card-title">Verification Extraction</div>
+            <div class="run-type-card-desc">Re-code a subset of an earlier run</div>
+          </button>
+        </div>
+      </div>
+
+      <div id="nr-verification" style="display:none">
+        <div class="modal-sec">
+          <div class="modal-sec-title">Extraction to verify</div>
+          <select id="nr-source" onchange="nrFilterChanged()" style="width:100%;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:12px"></select>
+        </div>
+
+        <div class="modal-sec">
+          <div class="modal-sec-title">Which papers</div>
+          <div class="exp-note">Include only papers given one of these answers in that run. Leave the question unset to include every paper it covered.</div>
+          <select id="nr-filter-q" onchange="nrFilterChanged()" style="width:100%;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:12px">
+            <option value="">No filter — every paper</option>
+          </select>
+          <div id="nr-filter-opts"></div>
+        </div>
+
+        <div class="modal-sec">
+          <div class="modal-sec-title">Carry over from the original</div>
+          <div class="exp-note">Answers copied into the new run so conditional questions line up — group names above all, since the outcome and means blocks hang off them. The verifier can still change them.</div>
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <button class="btn btn-ghost btn-sm" onclick="nrCarryPreset('structural')">Definitions only</button>
+            <button class="btn btn-ghost btn-sm" onclick="nrCarryPreset('none')">None</button>
+          </div>
+          <div id="nr-carry-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
+        </div>
+
+        <div class="modal-sec">
+          <div class="modal-sec-title">While coding, show</div>
+          <label class="exp-check"><input type="checkbox" id="nr-show-ai" checked> AI answers</label>
+          <label class="exp-check"><input type="checkbox" id="nr-show-orig" checked> Original answers from the run being verified</label>
+        </div>
+
+        <div id="nr-preview" style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--dim);line-height:1.7"></div>
+      </div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <div id="nr-error" style="flex:1;font-size:12px;color:var(--red)"></div>
+      <button class="btn btn-ghost btn-sm" onclick="closeNewRunModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="nr-create-btn" onclick="createHumanRun()">Start Extraction</button>
     </div>
   </div>
 </div>
@@ -1391,6 +1473,7 @@ let splitDraft = [];   // [{key, label, answered}] while the dialog is open
 let hfFields = [];
 let hfHumanAnswers = {};
 let hfAiAnswers = {};
+let hfOrigAnswers = {};   // answers from the run being verified, by field index
 let hfActiveTab = null;
 let autosaveTimer = null;
 
@@ -2312,15 +2395,23 @@ function renderHumanRunList() {
   updateHumanTabButtons();
   if (!humanRuns.length) { el.innerHTML = '<div class="empty">No human extraction runs yet</div>'; return; }
   const sorted = [...humanRuns].sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-  el.innerHTML = sorted.map(r => `
+  const nameById = Object.fromEntries(humanRuns.map(r => [r.id, r.name]));
+  el.innerHTML = sorted.map(r => {
+    const isVerification = r.run_mode === 'verification';
+    // Say what a verification run is checking — the name alone rarely tells you
+    const source = isVerification ? (nameById[r.source_run_id] || 'a deleted run') : '';
+    return `
     <div class="paper-card" onclick="openHumanRun('${r.id}')">
       <span class="dot dot-${r.status}"></span>
       <div class="paper-info">
         <div class="paper-title">${esc(r.name)}</div>
-        <div class="paper-meta">${r.done_count||0}/${r.pdf_count} done · ${relTime(r.created_at)}</div>
+        <div class="paper-meta">${r.done_count||0}/${r.pdf_count} done · ${relTime(r.created_at)}${
+          isVerification ? ` · verifying ${esc(source)}` : ''}</div>
       </div>
+      <span class="badge badge-${isVerification ? 'verification' : 'clean'}">${isVerification ? 'Verification' : 'Clean'}</span>
       <span class="badge badge-${r.status}">${r.status}</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function renderExtraction() {
@@ -2341,17 +2432,7 @@ async function renderExtraction() {
     openHumanRun(active.id);
     return;
   }
-  // No active run — prompt for a name then create
-  const name = prompt('Name this extraction run:', `Extraction ${new Date().toLocaleDateString()}`);
-  if (name === null) return; // user cancelled
-  const r = await fetch(`${API}/projects/${currentProjId}/runs/human`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name, pdf_filenames: [], ai_run_ref: latestAI?.id || null})
-  });
-  if(!r.ok) { const err=await r.json(); alert(err.detail||'Failed to create extraction'); return; }
-  const {run_id} = await r.json();
-  await loadHumanRuns();
-  openHumanRun(run_id);
+  openNewRunModal(latestAI?.id || null);
 }
 
 async function startFreshExtraction() {
@@ -2359,23 +2440,184 @@ async function startFreshExtraction() {
   const runsR = await fetch(`${API}/projects/${currentProjId}/runs`);
   const allRuns = await runsR.json();
   const latestAI = allRuns.find(r=>r.type==='ai'&&r.status==='complete');
-
-  const name = prompt('Name this extraction run:', `Extraction ${new Date().toLocaleDateString()}`);
-  if (name === null) return;
-  const r = await fetch(`${API}/projects/${currentProjId}/runs/human`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name, pdf_filenames: [], ai_run_ref: latestAI?.id || null})
-  });
-  if(!r.ok) { const err=await r.json(); alert(err.detail||'Failed to create extraction'); return; }
-  const {run_id} = await r.json();
-  await loadHumanRuns();
-  openHumanRun(run_id);
+  openNewRunModal(latestAI?.id || null);
 }
 
-async function refreshHumanForm() {
-  if (!hfRunId) return;
-  await loadHumanPapers();
-  if (hfCurrentPdf) await openPaper(hfCurrentPdf);
+// ══════════════════════════════════════════════════════════
+// New extraction: clean, or verification of an earlier run
+// ══════════════════════════════════════════════════════════
+
+let nrMode = 'clean';
+let nrAiRef = null;
+let nrCarry = [];   // field indices copied from the run being verified
+
+async function openNewRunModal(aiRunRef) {
+  nrAiRef = aiRunRef || null;
+  nrMode = 'clean';
+  setRunMode('clean');
+  document.getElementById('nr-name').value = `Extraction ${new Date().toLocaleDateString()}`;
+  document.getElementById('nr-error').textContent = '';
+  document.getElementById('nr-preview').textContent = '';
+  document.getElementById('nr-filter-opts').innerHTML = '';
+  document.getElementById('newrun-modal').classList.remove('hidden');
+
+  // Human runs that could be verified — newest first
+  const runs = await (await fetch(`${API}/projects/${currentProjId}/runs`)).json();
+  const human = runs.filter(r => r.type === 'human');
+  const sel = document.getElementById('nr-source');
+  sel.innerHTML = human.length
+    ? human.map(r => `<option value="${esc(r.id)}">${esc(r.name)} — ${r.pdf_count||0} papers</option>`).join('')
+    : '<option value="">No earlier extraction runs</option>';
+
+  nrCarryPreset('structural');   // group and outcome definitions by default
+
+  // Questions with fixed answers, tagged like the export dialog
+  const qs = expFilterableQuestions();
+  const times = {};
+  qs.forEach(f => times[f.question] = (times[f.question]||0) + 1);
+  document.getElementById('nr-filter-q').innerHTML =
+    '<option value="">No filter — every paper</option>' +
+    qs.map(f => {
+      const tag = times[f.question] > 1 ? ` [${expOutcomeBlock(f.qtype) || '#' + f.field_index}]` : '';
+      const label = (f.question.length > 80 ? f.question.slice(0,80)+'…' : f.question) + tag;
+      return `<option value="${f.field_index}" data-q="${esc(f.question)}">${esc(label)}</option>`;
+    }).join('');
+}
+
+// Fields whose answers define the shape of the rest of the form: the groups every
+// means table is keyed to, and the outcome lists the xPO/xSO blocks repeat over.
+function nrIsStructural(qtype) {
+  return /^(GroupSpecifier|POutcomeSpecifier\d*|SOutcomeSpecifier\d*)$/.test(qtype || '');
+}
+
+function nrCarryableFields() {
+  let fields = [];
+  try { fields = JSON.parse(currentProj?.extractor_json || '[]'); } catch(e) { fields = []; }
+  const skip = /^(InfoText|Subheading|RISTitle|RISAbstract)$/;
+  return fields.filter(f => !skip.test(f.qtype || '') && (f.question || '').trim());
+}
+
+function renderCarryList() {
+  const el = document.getElementById('nr-carry-list');
+  const fields = nrCarryableFields();
+  if (!fields.length) { el.innerHTML = '<div class="exp-sub">No questions to carry over</div>'; return; }
+  const chosen = new Set(nrCarry);
+  let lastTab = null;
+  el.innerHTML = fields.map(f => {
+    const tab = f.tab || '';
+    const head = tab !== lastTab ? `<div class="exp-sub" style="margin:8px 0 2px;font-weight:600">${esc(tab)}</div>` : '';
+    lastTab = tab;
+    const tag = nrIsStructural(f.qtype)
+      ? ` <span class="entry-badge">${esc(expOutcomeBlock(f.qtype) || 'groups')}</span>` : '';
+    const q = f.question.length > 62 ? f.question.slice(0, 62) + '…' : f.question;
+    return `${head}<label class="exp-check">
+      <input type="checkbox" class="nr-carry" value="${f.field_index}" ${chosen.has(f.field_index) ? 'checked' : ''}
+             onchange="nrCarryChanged()">
+      <span>${esc(q)}</span>${tag}
+    </label>`;
+  }).join('');
+}
+
+function nrCarryChanged() {
+  nrCarry = [...document.querySelectorAll('.nr-carry:checked')].map(c => parseInt(c.value, 10));
+}
+
+function nrCarryPreset(which) {
+  nrCarry = which === 'structural'
+    ? nrCarryableFields().filter(f => nrIsStructural(f.qtype)).map(f => f.field_index)
+    : [];
+  renderCarryList();
+}
+
+function closeNewRunModal() {
+  document.getElementById('newrun-modal').classList.add('hidden');
+}
+
+function setRunMode(mode) {
+  nrMode = mode;
+  document.getElementById('nr-card-clean').classList.toggle('selected', mode === 'clean');
+  document.getElementById('nr-card-verification').classList.toggle('selected', mode === 'verification');
+  document.getElementById('nr-verification').style.display = mode === 'verification' ? '' : 'none';
+  if (mode === 'verification') nrFilterChanged();
+}
+
+function nrFilterChanged() {
+  const fq = document.getElementById('nr-filter-q');
+  const wrap = document.getElementById('nr-filter-opts');
+  if (!fq.value) { wrap.innerHTML = ''; nrPreview(); return; }
+  const f = expFilterableQuestions().find(x => String(x.field_index) === String(fq.value));
+  const opts = (f && f.answer_options) || [];
+  wrap.innerHTML = '<div class="exp-note" style="margin-top:10px">Answers that qualify:</div>' +
+    opts.map(o => `<label class="exp-check"><input type="checkbox" class="nr-fval" value="${esc(o)}" onchange="nrPreview()"> ${esc(o)}</label>`).join('');
+  nrPreview();
+}
+
+function nrFilterPayload() {
+  const fq = document.getElementById('nr-filter-q');
+  const vals = [...document.querySelectorAll('.nr-fval:checked')].map(c => c.value);
+  if (!fq.value || !vals.length) return {filter_field: null, filter_question: null, filter_values: []};
+  return {
+    filter_field: parseInt(fq.value, 10),
+    filter_question: fq.options[fq.selectedIndex].dataset.q || '',
+    filter_values: vals,
+  };
+}
+
+// Live count of what the run would cover, and who decided those papers, so a
+// reviewer can see whether there is anything left for them to verify.
+async function nrPreview() {
+  const el = document.getElementById('nr-preview');
+  const source = document.getElementById('nr-source').value;
+  if (!source) { el.textContent = 'No earlier extraction run to verify.'; return; }
+  el.textContent = 'Counting…';
+  const r = await fetch(`${API}/projects/${currentProjId}/runs/human/preview`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({source_run_id: source, ...nrFilterPayload()})
+  });
+  if (!r.ok) { el.textContent = 'Could not preview that filter.'; return; }
+  const d = await r.json();
+  const byCoder = Object.entries(d.by_coder||{}).sort((a,b)=>b[1]-a[1])
+    .map(([who,n]) => `${esc(who)} ${n}`).join(' · ');
+  el.innerHTML = `<strong style="color:var(--text)">${d.count} paper${d.count===1?'':'s'}</strong> would be included.`
+    + (byCoder ? `<br>Originally decided by — ${byCoder}` : '');
+}
+
+async function createHumanRun() {
+  const name = document.getElementById('nr-name').value.trim();
+  const err = document.getElementById('nr-error');
+  const btn = document.getElementById('nr-create-btn');
+  err.textContent = '';
+  if (!name) { err.textContent = 'Give the run a name.'; return; }
+  const body = {name, pdf_filenames: [], ai_run_ref: nrAiRef, run_mode: nrMode};
+  if (nrMode === 'verification') {
+    const source = document.getElementById('nr-source').value;
+    if (!source) { err.textContent = 'Pick the extraction run to verify.'; return; }
+    Object.assign(body, nrFilterPayload(), {
+      source_run_id: source,
+      show_ai: document.getElementById('nr-show-ai').checked,
+      show_original: document.getElementById('nr-show-orig').checked,
+      carry_fields: nrCarry,
+    });
+  }
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/projects/${currentProjId}/runs/human`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) {
+      let msg = await r.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch(e) {}
+      err.textContent = msg;
+      return;
+    }
+    const {run_id} = await r.json();
+    closeNewRunModal();
+    await loadHumanRuns();
+    openHumanRun(run_id);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function openHumanRun(runId) {
@@ -2383,7 +2625,13 @@ async function openHumanRun(runId) {
   const r = await fetch(`${API}/runs/${runId}`);
   hfRunData = await r.json();
   if (hfRunId !== runId) return; // navigated away before fetch completed
-  document.getElementById('hf-run-title').textContent = hfRunData.name;
+  const isVerification = (hfRunData.run_mode === 'verification');
+  document.getElementById('hf-run-title').textContent =
+    hfRunData.name + (isVerification ? '  ·  verification' : '');
+  const vrow = document.getElementById('hf-verify-row');
+  if (vrow) vrow.style.display = isVerification ? '' : 'none';
+  const mine = document.getElementById('hf-hide-mine');
+  if (mine) mine.checked = false;
   const searchEl = document.getElementById('hf-search');
   if(searchEl) searchEl.value = '';
   showView('v-human-form');
@@ -2411,7 +2659,10 @@ function filterHumanPapers() {
     const status = p.paper_status || '';
     const matchesStatus = !statusFilter ||
       (statusFilter === '__none__' ? !status : status === statusFilter);
-    return matchesSearch && matchesStatus;
+    // In a verification run, let a reviewer hide the papers they decided themselves
+    const hideMine = document.getElementById('hf-hide-mine')?.checked;
+    const notMine = !hideMine || !currentUser || (p.original_coder || '') !== currentUser;
+    return matchesSearch && matchesStatus && notMine;
   });
   renderHumanPaperList(filtered);
 }
@@ -2434,9 +2685,19 @@ function renderHumanPaperList(papers) {
     const dot = (!isContainer && p.paper_status) ? `<div class="status-dot" data-s="${p.paper_status}"></div>` : '';
     const badge = isContainer
       ? `<span class="entry-badge">${subCounts[p.pdf_filename]||0} studies</span>` : '';
+    // In a verification run the card credits whoever settled the paper originally.
+    // Pinned: verified here, but the source run changed and it no longer matches
+    const dropped = p.filter_dropped
+      ? `<span class="entry-badge" style="color:var(--yellow);border-color:var(--yellow)" title="This paper no longer matches the verification filter, but it has answers in this run so it stays listed">off-filter</span>`
+      : '';
+    const orig = p.original_coder
+      ? `<div style="font-size:9px;color:var(--dim);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px"
+              title="Originally decided by ${esc(p.original_coder)}${p.original_status ? ' — ' + esc(p.original_status) : ''}">orig: ${esc(p.original_coder)}</div>`
+      : '';
     const right = isContainer ? '' : `
         ${doi}
         <div class="paper-prog">${p.answered} ✓</div>
+        ${orig}
         ${p.last_coder ? `<div style="font-size:9px;color:var(--dim);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px" title="${esc(p.last_coder)}">${esc(p.last_coder)}</div>` : ''}`;
     const inFamily = activeFamily && (isContainer || isSub) &&
                      (p.parent_pdf === activeFamily || p.pdf_filename === activeFamily);
@@ -2449,7 +2710,7 @@ function renderHumanPaperList(papers) {
     ].filter(Boolean).join(' ');
     return `<div class="${cls}" onclick="openPaper('${escJs(p.pdf_filename)}')">
       <div class="paper-info">
-        <div class="paper-title" style="display:flex;align-items:center;gap:5px">${dot}${esc(label)}${badge}</div>
+        <div class="paper-title" style="display:flex;align-items:center;gap:5px">${dot}${esc(label)}${badge}${dropped}</div>
         <div class="paper-meta">${isSub ? esc(meta) : meta}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">${right}
@@ -2472,6 +2733,7 @@ async function openPaper(pdfFilename) {
   hfFields = data.extractor_fields;
   hfHumanAnswers = data.human_answers || {};
   hfAiAnswers = data.ai_answers || {};
+  hfOrigAnswers = data.original_answers || {};
   hfCurrentBib = data.bib || {};
   hfCurrentStatus = data.paper_status || '';
   hfEntry = {label: data.entry_label||'', parent: data.parent_pdf||'',
@@ -2550,6 +2812,42 @@ function switchFormTab(tabName) {
   renderFormPane();
 }
 
+// What a stored answer looks like once it is out of JSON, for display only.
+function fmtStoredAnswer(raw) {
+  if (raw === null || raw === undefined || raw === '') return '';
+  let v = raw;
+  try { v = JSON.parse(raw); } catch(e) { return String(raw); }
+  if (Array.isArray(v)) return v.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join('; ');
+  if (v && typeof v === 'object') {
+    return Object.entries(v).map(([k, x]) => `${k}: ${typeof x === 'object' ? JSON.stringify(x) : String(x)}`).join('\n');
+  }
+  return String(v);
+}
+
+// The reference panels above a field: the AI's answer, and — in a verification run —
+// the answer the original reviewer gave. Both are opt-in per run.
+function referenceBlocks(f) {
+  let html = '';
+  const showAi = !hfRunData || hfRunData.show_ai === undefined || hfRunData.show_ai;
+  if (showAi && f.show_with && f.show_with.length) {
+    const aiEntries = f.show_with.map(qnum => {
+      const a = hfAiAnswers[qnum];
+      return a ? `<div><span style="color:var(--accent2);font-size:10px;font-family:var(--mono)">Q${qnum}</span> ${esc(a)}</div>` : '';
+    }).filter(Boolean).join('');
+    if (aiEntries) html += `<div class="field-ai"><div class="field-ai-label">AI Suggestion</div><div class="field-ai-answer">${aiEntries}</div></div>`;
+  }
+  if (hfRunData && hfRunData.show_original && f.field_index !== undefined) {
+    const o = hfOrigAnswers[String(f.field_index)];
+    const text = o ? fmtStoredAnswer(o.answer) : '';
+    if (text) {
+      const who = o.coder ? `<span class="orig-coder">${esc(o.coder)}</span>` : '';
+      html += `<div class="field-orig"><div class="field-orig-label">Original answer ${who}</div>` +
+              `<div class="field-orig-answer">${esc(text)}</div></div>`;
+    }
+  }
+  return html;
+}
+
 function renderFormPane() {
   const area = document.getElementById('hf-form-area');
   // Preserve debounced edits before replacing the current form DOM.
@@ -2605,14 +2903,7 @@ function renderField(f) {
   const qt = f.qtype;
 
   // Build AI context block
-  let aiBlock = '';
-  if(f.show_with && f.show_with.length) {
-    const aiEntries = f.show_with.map(qnum=>{
-      const a = hfAiAnswers[qnum];
-      return a ? `<div><span style="color:var(--accent2);font-size:10px;font-family:var(--mono)">Q${qnum}</span> ${esc(a)}</div>` : '';
-    }).filter(Boolean).join('');
-    if(aiEntries) aiBlock=`<div class="field-ai"><div class="field-ai-label">AI Suggestion</div><div class="field-ai-answer">${aiEntries}</div></div>`;
-  }
+  const aiBlock = referenceBlocks(f);
 
   // Non-interactive display types (include aiBlock if present)
   if(qt==='RISTitle') return `<div class="field-block"><div class="ris-display"><strong>Title:</strong> ${esc(hfCurrentBib?.title||'—')}</div>${aiBlock}</div>`;
@@ -3255,14 +3546,7 @@ function renderBGField(f, group) {
   const saved = savedAll[gid] ?? null;
   const infoIcon = f.info ? ` <i class="tip-icon" data-tip-text="${f.info.replace(/"/g,'&quot;')}">ⓘ</i>` : '';
   const qLabel = f.question ? `<div class="bg-sub-label">${esc(f.question)}${infoIcon}</div>` : '';
-  let aiBlock = '';
-  if(f.show_with && f.show_with.length) {
-    const aiEntries = f.show_with.map(qnum=>{
-      const a = hfAiAnswers[qnum];
-      return a ? `<div><span style="color:var(--accent2);font-size:10px;font-family:var(--mono)">Q${qnum}</span> ${esc(a)}</div>` : '';
-    }).filter(Boolean).join('');
-    if(aiEntries) aiBlock=`<div class="field-ai"><div class="field-ai-label">AI Suggestion</div><div class="field-ai-answer">${aiEntries}</div></div>`;
-  }
+  const aiBlock = referenceBlocks(f);
   let inputHtml = '';
   if(baseType==='ManySelect') {
     const opts = f.answer_options||[];
@@ -3336,14 +3620,7 @@ function renderXOField(f, outcome, attr, pfx) {
   const saved = savedAll[oid] ?? null;
   const infoIcon = f.info ? ` <i class="tip-icon" data-tip-text="${f.info.replace(/"/g,'&quot;')}">ⓘ</i>` : '';
   const qLabel = f.question ? `<div class="bo-sub-label">${esc(f.question)}${infoIcon}</div>` : '';
-  let aiBlock = '';
-  if(f.show_with && f.show_with.length) {
-    const aiEntries = f.show_with.map(qnum=>{
-      const a = hfAiAnswers[qnum];
-      return a ? `<div><span style="color:var(--accent2);font-size:10px;font-family:var(--mono)">Q${qnum}</span> ${esc(a)}</div>` : '';
-    }).filter(Boolean).join('');
-    if(aiEntries) aiBlock=`<div class="field-ai"><div class="field-ai-label">AI Suggestion</div><div class="field-ai-answer">${aiEntries}</div></div>`;
-  }
+  const aiBlock = referenceBlocks(f);
   const cellType = `${pfx}_gmeans_cell`, manyType=`${pfx}_many`, naType=`${pfx}_na`, textType=`${pfx}_text`;
   let inputHtml = '';
   if(baseType==='GMeansTable') {
