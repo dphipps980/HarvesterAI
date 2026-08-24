@@ -2447,7 +2447,7 @@ function renderHumanPaperList(papers) {
       (inFamily && isContainer) ? 'family-head' : '',
       p.pdf_filename === hfCurrentPdf ? 'active' : '',
     ].filter(Boolean).join(' ');
-    return `<div class="${cls}" onclick="openPaper('${esc(p.pdf_filename)}')">
+    return `<div class="${cls}" onclick="openPaper('${escJs(p.pdf_filename)}')">
       <div class="paper-info">
         <div class="paper-title" style="display:flex;align-items:center;gap:5px">${dot}${esc(label)}${badge}</div>
         <div class="paper-meta">${isSub ? esc(meta) : meta}</div>
@@ -2536,7 +2536,7 @@ function renderFormTabs() {
   const tabs = [...new Set(hfFields.map(f=>f.tab).filter(Boolean))];
   const tabsEl = document.getElementById('form-tabs');
   tabsEl.innerHTML = tabs.map((t,i)=>
-    `<div class="form-tab ${i===0?'active':''}" data-tab="${esc(t)}" onclick="switchFormTab('${esc(t)}')">${esc(t)}</div>`
+    `<div class="form-tab ${i===0?'active':''}" data-tab="${esc(t)}" onclick="switchFormTab('${escJs(t)}')">${esc(t)}</div>`
   ).join('') + `<div class="form-tab" data-tab="__admin__" onclick="switchFormTab('__admin__')">Study Admin</div>`;
   hfActiveTab = tabs[0]||null;
   renderFormPane();
@@ -3699,7 +3699,7 @@ function renderContainerPane() {
   const rows = (hfEntry.entries||[]).map(e => {
     const p = hfPapers.find(x => x.pdf_filename === e.pdf_filename) || {};
     const status = p.paper_status ? `<div class="status-dot" data-s="${p.paper_status}"></div>` : '';
-    return `<div class="paper-card" onclick="openPaper('${esc(e.pdf_filename)}')">
+    return `<div class="paper-card" onclick="openPaper('${escJs(e.pdf_filename)}')">
       <div class="paper-info">
         <div class="paper-title" style="display:flex;align-items:center;gap:5px">${status}${esc(e.entry_label||'Study')}</div>
         <div class="paper-meta">${p.answered ? p.answered + ' answers' : 'Not started'}</div>
@@ -4200,6 +4200,11 @@ function secretSet(id, val) {
 // Utils
 // ══════════════════════════════════════════════════════════
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// For a value that lands inside an inline handler — onclick="f('HERE')". The browser
+// decodes the attribute as HTML first and then parses it as JavaScript, so it needs
+// both: escape the JS string, then escape for the attribute. Without this a filename
+// like "O'Brien-2002.pdf" ends the string early and the whole handler is dead.
+function escJs(s){ return esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")); }
 function relTime(iso){
   if(!iso) return '—';
   const d=new Date(iso+(iso.endsWith('Z')?'':'Z'));
@@ -4435,9 +4440,9 @@ async function showManageUsers() {
           <option value="admin" ${u.role==='admin'?'selected':''}>🔑 Admin</option>
         </select>
         <button class="btn btn-sm" style="font-size:11px;padding:2px 6px"
-                onclick="resetUserPassword('${esc(u.name)}')">🔑 Reset PW</button>
+                onclick="resetUserPassword('${escJs(u.name)}')">🔑 Reset PW</button>
         <button class="btn btn-danger btn-sm" style="font-size:11px;padding:2px 6px"
-                onclick="deleteGlobalUser('${esc(u.name)}')">✕</button>
+                onclick="deleteGlobalUser('${escJs(u.name)}')">✕</button>
       </div>`).join('');
   } catch(e) {
     container.innerHTML = '<span style="color:#ef4444">Failed to load users.</span>';
@@ -4551,7 +4556,7 @@ async function showProjectMembers() {
             ${canChangeToOwner ? `<option value="owner" ${m.project_role==='owner'?'selected':''}>👑 Owner</option>` : ''}
           </select>
           <button class="btn btn-danger btn-sm" style="font-size:11px;padding:2px 6px"
-                  onclick="removeProjectMember('${esc(m.username)}')">✕</button>
+                  onclick="removeProjectMember('${escJs(m.username)}')">✕</button>
         ` : `<span style="font-size:11px;color:var(--dim)">${PROJ_ROLE_LABEL[m.project_role] || m.project_role}</span>`}
       </div>`).join('');
   } catch(e) { list.innerHTML = '<span style="color:#ef4444">Failed to load members.</span>'; }
