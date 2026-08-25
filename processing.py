@@ -403,6 +403,9 @@ def call_api(api_key, pdf_text, questions, question_context, model, temperature,
 
 def parse_answers(response_text, num_questions):
     answers = [""] * num_questions
+    response_text = response_text or ""
+    if not response_text:
+        return answers
     for i in range(1, num_questions + 1):
         m = re.search(rf"\[\[{i}\]\]\s*(.*?)(?=\[\[\d+\]\]|$)", response_text, re.DOTALL)
         if m:
@@ -412,6 +415,38 @@ def parse_answers(response_text, num_questions):
         for i, s in enumerate(splits[1:num_questions+1]):
             answers[i] = re.sub(r"\s+", " ", s.strip())
     return answers
+
+
+def _completion_text(data, max_output_tokens=None):
+    """(answer_text, why_empty) from a chat completion.
+
+    Reasoning models can spend the whole output budget thinking and return
+    content: null. That used to reach parse_answers as None and surface as
+    "expected string or bytes-like object, got 'NoneType'", which says nothing
+    about the cause — so when there is no answer, say why.
+    """
+    choice = ((data or {}).get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+    for holder, key in ((msg, "content"), (msg, "text"), (choice, "text")):
+        val = holder.get(key)
+        if isinstance(val, str) and val.strip():
+            return val, ""
+
+    finish = choice.get("finish_reason") or "unknown"
+    usage = (data or {}).get("usage") or {}
+    out_tokens = usage.get("completion_tokens")
+    reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
+    why = f"the model returned no answer text (finish_reason={finish}"
+    if out_tokens is not None:
+        why += f", {out_tokens} output tokens"
+    why += ")"
+    if reasoning:
+        why += f"; it produced {len(reasoning)} chars of reasoning instead"
+    if finish == "length" or (out_tokens and max_output_tokens and out_tokens >= max_output_tokens):
+        why += (f" — it used the whole {max_output_tokens} token output budget before answering."
+                " Raise Max Output Tokens in the project settings, or pick a model that"
+                " reasons less.")
+    return "", why
 
 
 # ── Batch processing ──────────────────────────────────────────────────────────
@@ -440,7 +475,14 @@ def process_batch(batch_id, pdf_batch, questions, question_context, question_nam
                             max_output_tokens, ctx=ctx, extra_context=extra_context,
                             raw_api_mode=raw_api_mode, raw_api_template=raw_api_template,
                             label=f"Batch {batch_id+1}: ")
-            answer_text = resp["choices"][0]["message"]["content"]
+            answer_text, why_empty = _completion_text(resp, max_output_tokens)
+            if not answer_text:
+                ctx.log(f"  ERROR {filename}: {why_empty}")
+                with ctx.lock:
+                    ctx.failed.append(f"{filename} (no answer text)")
+                    ctx.completed += 1
+                    ctx.progress(ctx.completed, ctx.total)
+                continue
             answers = parse_answers(answer_text, len(questions))
 
             if all(a == "" for a in answers):
