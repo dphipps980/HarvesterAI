@@ -269,10 +269,52 @@ def _extract_by_path(data, path):
     return cur
 
 
+class _Heartbeat:
+    """Log that a request is still in flight, once a minute until it returns.
+
+    A slow model is silent otherwise: the provider holds the connection open and
+    trickles keepalive bytes, so requests' timeout never fires and nothing is
+    logged until the call finishes. A run that is merely slow then looks dead.
+    """
+
+    def __init__(self, ctx, label, interval=60):
+        self.ctx, self.label, self.interval = ctx, label, interval
+        self._stop = threading.Event()
+        self._thread = None
+        self.started = 0.0
+
+    def __enter__(self):
+        self.started = time.time()
+        if self.ctx:
+            self._thread = threading.Thread(target=self._tick, daemon=True)
+            self._thread.start()
+        return self
+
+    def _tick(self):
+        while not self._stop.wait(self.interval):
+            if self.ctx.stop.is_set():
+                return
+            mins = (time.time() - self.started) / 60
+            self.ctx.log(f"{self.label}still waiting on the model ({mins:.0f}m elapsed)")
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1)
+        return False
+
+    def elapsed(self):
+        return time.time() - self.started
+
+
+def _fmt_secs(s):
+    return f"{s:.0f}s" if s < 60 else f"{int(s // 60)}m{int(s % 60):02d}s"
+
+
 def call_api(api_key, pdf_text, questions, question_context, model, temperature,
              top_p, system_context, provider, max_output_tokens=8000,
              max_retries=10, ctx=None, extra_context="",
-             raw_api_mode=False, raw_api_template=""):
+             raw_api_mode=False, raw_api_template="", label=""):
 
     q_parts = []
     for i, q in enumerate(questions, 1):
@@ -327,7 +369,11 @@ def call_api(api_key, pdf_text, questions, question_context, model, temperature,
         if ctx and ctx.stop.is_set():
             raise RuntimeError("stopped by user")
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
+            with _Heartbeat(ctx, label) as hb:
+                resp = requests.post(url, headers=headers, json=payload, timeout=300)
+            if resp.ok and ctx and hb.elapsed() >= 60:
+                # Worth saying out loud — it is the only signal of how slow a model is
+                ctx.log(f"{label}model replied after {_fmt_secs(hb.elapsed())}")
             if resp.status_code == 429 or "rate limit" in resp.text.lower():
                 wait = 60 + random.uniform(0, 5)
                 if ctx: ctx.log(f"Rate limit — waiting {wait:.0f}s...")
@@ -392,7 +438,8 @@ def process_batch(batch_id, pdf_batch, questions, question_context, question_nam
             resp = call_api(api_key, pdf["text"], questions, question_context,
                             model, temperature, top_p, system_context, provider,
                             max_output_tokens, ctx=ctx, extra_context=extra_context,
-                            raw_api_mode=raw_api_mode, raw_api_template=raw_api_template)
+                            raw_api_mode=raw_api_mode, raw_api_template=raw_api_template,
+                            label=f"Batch {batch_id+1}: ")
             answer_text = resp["choices"][0]["message"]["content"]
             answers = parse_answers(answer_text, len(questions))
 
