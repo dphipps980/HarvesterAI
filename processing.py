@@ -417,6 +417,28 @@ def parse_answers(response_text, num_questions):
     return answers
 
 
+def _usage_summary(data):
+    """"in 41,234 / out 8,000 tok (7,410 reasoning) · $0.0123" — "" if the provider
+    reported nothing. Providers vary in which fields they fill, so every part is
+    optional; reasoning tokens are what make an output budget disappear.
+    """
+    usage = (data or {}).get("usage") or {}
+    if not usage:
+        return ""
+    parts = []
+    prompt = usage.get("prompt_tokens")
+    out = usage.get("completion_tokens")
+    if prompt is not None or out is not None:
+        parts.append(f"in {prompt or 0:,} / out {out or 0:,} tok")
+    reasoning = ((usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
+    if reasoning:
+        parts.append(f"({reasoning:,} reasoning)")
+    cost = usage.get("cost")
+    if isinstance(cost, (int, float)) and cost > 0:
+        parts.append(f"· ${cost:.4f}")
+    return " ".join(parts)
+
+
 def _completion_text(data, max_output_tokens=None):
     """(answer_text, why_empty) from a chat completion.
 
@@ -507,7 +529,8 @@ def process_batch(batch_id, pdf_batch, questions, question_context, question_nam
             with ctx.lock:
                 ctx.completed += 1
                 ctx.progress(ctx.completed, ctx.total)
-            ctx.log(f"  Done: {filename}")
+            usage = _usage_summary(resp)
+            ctx.log(f"  Done: {filename}" + (f" — {usage}" if usage else ""))
 
         except Exception as e:
             if "stopped by user" not in str(e):
