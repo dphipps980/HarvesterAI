@@ -2094,18 +2094,26 @@ async function _extractFiles(files, bar, lbl) {
   const workers = Array.from({length: 4}, () => (async () => {
     while (q.length) {
       const file = q.shift(); if (!file) break;
+      let pdf = null;
       try {
         const ab = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({data: ab}).promise;
+        pdf = await pdfjsLib.getDocument({data: ab}).promise;
         let text = '';
         for (let p = 1; p <= pdf.numPages; p++) {
           const page = await pdf.getPage(p);
           const c = await page.getTextContent();
           text += c.items.map(i => i.str).join(' ') + '\n';
+          page.cleanup();   // drop this page's fonts and operator list
         }
         extractedPdfs.push({filename: file.name, text});
       } catch(e) {
         extractedPdfs.push({filename: file.name, text: ''});
+      } finally {
+        // Without this, every document stays alive in the pdf.js worker for the
+        // whole run — a few hundred papers then exhaust the tab and take the
+        // browser down with it, always at about the same file.
+        if (pdf) { try { await pdf.destroy(); } catch(e) {} }
+        pdf = null;
       }
       done++;
       const pct = Math.round(done / files.length * 100);
@@ -2143,23 +2151,46 @@ function showPdfReuseDialog(existingCount, totalCount) {
 
 // Returns a list of {filename, reason} for anything that didn't make it to the
 // server. A failure never aborts the run — the PDFs after it still get uploaded.
+// btoa() needs a binary string, but building one character at a time makes a
+// string as long as the file plus a mountain of garbage per PDF. Chunk it.
+function bytesToBase64(bytes) {
+  const CHUNK = 0x8000;
+  const parts = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
+  }
+  return btoa(parts.join(''));
+}
+
+// Batch by size rather than by count: five 40 MB scans in one request is a
+// ~270 MB JSON string in the tab, which is what kills the browser.
+function _uploadBatches(fileObjects, maxBytes, maxFiles) {
+  const batches = [];
+  let batch = [], bytes = 0;
+  for (const f of fileObjects) {
+    if (batch.length && (bytes + f.size > maxBytes || batch.length >= maxFiles)) {
+      batches.push(batch); batch = []; bytes = 0;
+    }
+    batch.push(f); bytes += f.size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
 async function uploadPdfsToServer(fileObjects, projId, onProgress) {
-  const BATCH = 5;
   let done = 0;
   const failed = [];
-  for (let i = 0; i < fileObjects.length; i += BATCH) {
-    const batch = fileObjects.slice(i, i + BATCH);
-    const payloads = await Promise.all(batch.map(async f => {
-      const ab = await f.arrayBuffer();
-      const bytes = new Uint8Array(ab);
-      let binary = '';
-      for (let j = 0; j < bytes.length; j++) binary += String.fromCharCode(bytes[j]);
-      return {filename: f.name, data_b64: btoa(binary)};
+  for (const batch of _uploadBatches(fileObjects, 8 * 1024 * 1024, 5)) {
+    let payloads = await Promise.all(batch.map(async f => {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      return {filename: f.name, data_b64: bytesToBase64(bytes)};
     }));
     try {
+      const body = JSON.stringify(payloads);
+      payloads = null;              // let the encoded copies go before the request
       const r = await fetch(`${API}/projects/${projId}/pdfs`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payloads)
+        body
       });
       if (!r.ok) throw new Error(`server returned ${r.status}`);
       const res = await r.json();
