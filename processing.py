@@ -314,7 +314,7 @@ def _fmt_secs(s):
 def call_api(api_key, pdf_text, questions, question_context, model, temperature,
              top_p, system_context, provider, max_output_tokens=8000,
              max_retries=10, ctx=None, extra_context="",
-             raw_api_mode=False, raw_api_template="", label=""):
+             raw_api_mode=False, raw_api_template="", label="", reasoning_effort=""):
 
     q_parts = []
     for i, q in enumerate(questions, 1):
@@ -364,6 +364,10 @@ def call_api(api_key, pdf_text, questions, question_context, model, temperature,
         _tokens_key = "max_completion_tokens" if provider == "openai" else "max_tokens"
         payload = {"model": model, "messages": [{"role":"user","content":user_content}],
                    "temperature": temperature, "top_p": top_p, _tokens_key: max_output_tokens}
+        # Only OpenRouter takes this object. The other providers spell it differently
+        # (or not at all) and would reject an unknown field, so never send it there.
+        if provider == "openrouter" and reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
 
     for attempt in range(1, max_retries + 1):
         if ctx and ctx.stop.is_set():
@@ -476,7 +480,8 @@ def _completion_text(data, max_output_tokens=None):
 def process_batch(batch_id, pdf_batch, questions, question_context, question_names,
                   api_key, model, temperature, top_p, system_context, provider,
                   max_output_tokens, run_id, project_id, ctx: JobContext,
-                  extra_context="", raw_api_mode=False, raw_api_template=""):
+                  extra_context="", raw_api_mode=False, raw_api_template="",
+                  reasoning_effort=""):
     """Process one batch. Each pdf: {filename, text}"""
     for pdf in pdf_batch:
         if ctx.stop.is_set():
@@ -496,7 +501,7 @@ def process_batch(batch_id, pdf_batch, questions, question_context, question_nam
                             model, temperature, top_p, system_context, provider,
                             max_output_tokens, ctx=ctx, extra_context=extra_context,
                             raw_api_mode=raw_api_mode, raw_api_template=raw_api_template,
-                            label=f"Batch {batch_id+1}: ")
+                            label=f"Batch {batch_id+1}: ", reasoning_effort=reasoning_effort)
             answer_text, why_empty = _completion_text(resp, max_output_tokens)
             if not answer_text:
                 ctx.log(f"  ERROR {filename}: {why_empty}")
@@ -556,6 +561,8 @@ def run_ai_job(run_id, project_id, config, pdfs, ctx: JobContext):
         ctx.log(f"Extra context: {len(config['extra_context'])} chars")
     if config.get("raw_api_mode") and config.get("raw_api_template","").strip():
         ctx.log("Raw API template: ENABLED (Basic model settings overridden)")
+    if config.get("reasoning_effort"):
+        ctx.log(f"Reasoning effort: {config['reasoning_effort']}")
 
     try:
         questions = json.loads(config.get("questions_json","[]"))
@@ -595,7 +602,8 @@ def run_ai_job(run_id, project_id, config, pdfs, ctx: JobContext):
                             run_id, project_id, ctx,
                             extra_context=config.get("extra_context", ""),
                             raw_api_mode=config.get("raw_api_mode", False),
-                            raw_api_template=config.get("raw_api_template", ""))
+                            raw_api_template=config.get("raw_api_template", ""),
+                            reasoning_effort=config.get("reasoning_effort", ""))
             for i, batch in enumerate(batches)
         ]
         for f in concurrent.futures.as_completed(futures):

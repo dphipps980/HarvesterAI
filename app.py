@@ -182,6 +182,9 @@ async def auth_middleware(request: Request, call_next):
     # Any authenticated user can change their own password
     if method == "POST" and path == "/api/auth/change-password":
         return await call_next(request)
+    # Reads OpenRouter's public model list — no project, no key, nothing to gate
+    if method == "GET" and path == "/api/openrouter/model":
+        return await call_next(request)
     # Any authenticated user can list or create a project, or import
     if path == "/api/projects" and method in ("GET", "POST"):
         return await call_next(request)
@@ -264,6 +267,40 @@ class ChangePasswordRequest(BaseModel):
 @app.get("/api/auth/signup-mode")
 def get_signup_mode():
     return {"signup_mode": SIGNUP_MODE if AUTH_MODE == "login" else "closed"}
+
+
+_OR_MODEL_CACHE = {"at": 0.0, "models": {}}
+
+
+@app.get("/api/openrouter/model")
+def openrouter_model_info(model: str):
+    """What OpenRouter reports about one model's reasoning support.
+
+    Lets the settings UI offer effort levels only where they exist, rather than
+    sending a parameter the model would ignore — or reject.
+    """
+    now = _time.time()
+    if now - _OR_MODEL_CACHE["at"] > 900 or not _OR_MODEL_CACHE["models"]:
+        try:
+            import requests
+            data = requests.get("https://openrouter.ai/api/v1/models", timeout=20).json()
+            _OR_MODEL_CACHE["models"] = {m["id"]: m for m in data.get("data", [])}
+            _OR_MODEL_CACHE["at"] = now
+        except Exception:
+            logger.exception("Could not reach OpenRouter's model list")
+            return {"known": False}
+
+    m = _OR_MODEL_CACHE["models"].get((model or "").strip())
+    if not m:
+        return {"known": False}
+    r = m.get("reasoning") or {}
+    return {
+        "known": True,
+        "supports_reasoning": bool(r) or ("reasoning" in (m.get("supported_parameters") or [])),
+        "mandatory": bool(r.get("mandatory")),
+        "default_effort": r.get("default_effort"),
+        "supported_efforts": r.get("supported_efforts") or [],
+    }
 
 
 @app.get("/api/config/pdf-location")
@@ -374,6 +411,7 @@ class ConfigUpdate(BaseModel):
     show_reviewer_breakdown: Optional[int] = None
     raw_api_mode: Optional[int] = None
     raw_api_template: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
 @app.patch("/api/projects/{proj_id}/config")
 def update_config(proj_id: str, body: ConfigUpdate):
@@ -618,6 +656,7 @@ def create_ai_run(proj_id: str, body: AIRunCreate):
         "extra_context": proj.get("extra_context_text") or "",
         "raw_api_mode": bool(proj.get("raw_api_mode")),
         "raw_api_template": proj.get("raw_api_template") or "",
+        "reasoning_effort": proj.get("reasoning_effort") or "",
     }
 
     ctx = JobContext(run_id, proj_id, _publish)

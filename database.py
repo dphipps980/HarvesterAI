@@ -228,6 +228,14 @@ def init_db():
         ignore_duplicate_column=True,
     )
 
+    # Migration: reasoning effort — how much of the output budget a thinking model
+    # may spend before answering. Empty means "send nothing, use the model's default".
+    _run_migration(
+        "ALTER TABLE projects ADD COLUMN reasoning_effort TEXT DEFAULT ''",
+        "add projects.reasoning_effort",
+        ignore_duplicate_column=True,
+    )
+
     # Migration: verification runs — a second pass over an earlier extraction,
     # narrowed by an answer given in it and showing that run's answers alongside.
     for _col, _decl in (
@@ -314,7 +322,7 @@ def project_get(proj_id, include_blobs=False):
                        questions_json, question_context_json, question_names_json,
                        extractor_json, ris_raw, audit_log_enabled, show_reviewer_breakdown,
                        extra_context_text, extra_context_filename,
-                       raw_api_mode, raw_api_template
+                       raw_api_mode, raw_api_template, reasoning_effort
                 FROM projects WHERE id=?""", (proj_id,)).fetchone()
         return dict(row) if row else None
 

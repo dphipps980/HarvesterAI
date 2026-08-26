@@ -1334,7 +1334,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
         <div class="form-row">
           <div class="form-group">
             <label>Provider <i class="tip-icon" data-tip-key="provider">ⓘ</i></label>
-            <select id="cfg-provider" onchange="cfgProviderChange()">
+            <select id="cfg-provider" onchange="cfgProviderChange(); refreshReasoningOptions()">
               <option value="deepseek">DeepSeek</option>
               <option value="openai">OpenAI (GPT-5+)</option>
               <option value="openai_legacy">OpenAI (GPT-4 / Older)</option>
@@ -1345,7 +1345,7 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           </div>
           <div class="form-group" style="flex:2">
             <label>Model</label>
-            <input id="cfg-model" type="text" value="deepseek-chat" autocomplete="off" data-1p-ignore data-form-type="other">
+            <input id="cfg-model" type="text" value="deepseek-chat" autocomplete="off" data-1p-ignore data-form-type="other" onchange="refreshReasoningOptions()">
           </div>
           <div class="form-group" style="flex:2">
             <label>API Key <i class="tip-icon" data-tip-key="api-key">ⓘ</i></label>
@@ -1372,7 +1372,14 @@ body:not(.global-admin).proj-none   .proj-owner-only { display: none !important;
           </div>
           <div class="form-group">
             <label>Max Output Tokens <i class="tip-icon" data-tip-key="max-tokens">ⓘ</i></label>
-            <input id="cfg-maxtok" type="number" value="8000" min="500" max="32000">
+            <input id="cfg-maxtok" type="number" value="8000" min="500" max="128000">
+          </div>
+          <div class="form-group" id="cfg-reasoning-group" style="display:none">
+            <label>Reasoning <i class="tip-icon" data-tip-key="reasoning-effort">ⓘ</i></label>
+            <select id="cfg-reasoning">
+              <option value="">Model default</option>
+            </select>
+            <div id="cfg-reasoning-note" class="exp-sub" style="margin-top:4px;line-height:1.5"></div>
           </div>
           <div class="form-group">
             <label>Max Workers <i class="tip-icon" data-tip-key="max-workers">ⓘ</i></label>
@@ -1496,6 +1503,7 @@ const TIPS = {
   'extractor-file':   'Excel file defining the human extraction form.\nColumns: Tab | Question | Info | ShowWith | Qtype | AO (semicolon-separated answer options)\n\nLeave blank if only using AI extraction.',
   'ris-file':         'RIS export from your reference manager (e.g. Zotero).\nLinks each PDF filename to its bibliography metadata — title, authors, abstract, DOI.\n\nImport via Zotero → File → Export Library → RIS format.',
   'provider':         'DeepSeek Chat: Best value (~$0.008/PDF)\nOpenAI GPT-4o: Good quality (~$0.15/PDF)\nOpenAI GPT-4o Mini: Balanced (~$0.02/PDF)\nAnthropic Claude Sonnet 4.6: Excellent quality\nAnthropic Claude Opus 4.6: Highest quality\n\nOpenRouter: A gateway to 200+ models including OpenAI, Anthropic, Google, DeepSeek, Kimi and more — often at competitive or lower prices than direct APIs. Useful for accessing models not otherwise listed here.\n⚠ Caution: response times can be slower and more variable than direct providers; reliability depends on the underlying model\'s availability through OpenRouter; not recommended for time-sensitive bulk runs.\n\nAuthor\'s tip: DeepSeek for value; Claude Sonnet if quality is the priority; OpenRouter if you want to experiment with a wider model selection.',
+  'reasoning-effort': 'How much of the output budget a thinking model may spend before it answers.\n\nOpenRouter only — the levels offered come from the model itself.\n\nOn most models effort is a share of Max Output Tokens, so "max" can consume the whole budget and leave nothing to answer with. Leave on Model default unless a run shows reasoning eating the budget.',
   'api-key':          'API key for the selected provider.\nStored in the project\'s SQLite database.\n\nEnsure the server is on a trusted private network if you have security concerns.',
   'temperature':      'Controls randomness in AI responses:\n• 0.0–0.3: Very focused / deterministic (best for data extraction)\n• 0.4–0.7: Balanced\n• 0.8–1.0: More creative\n\nRecommended: 0.2 for systematic reviews',
   'top-p':            'Controls the diversity of word choices:\n• 0.1: Only the top 10% most likely words\n• 0.5: Top 50% most likely words\n• 0.95–1.0: Almost all words considered\n\nRecommended: 0.95',
@@ -1806,6 +1814,7 @@ function populateProjectView(p) {
   document.getElementById('cfg-topp').value = p.top_p ?? 0.95;
   document.getElementById('cfg-topp-v').textContent = p.top_p ?? 0.95;
   document.getElementById('cfg-maxtok').value = p.max_output_tokens || 8000;
+  refreshReasoningOptions();
   document.getElementById('cfg-workers').value = p.max_workers || 5;
   document.getElementById('cfg-syscontext').value = p.system_context || DEFAULT_SYSTEM_CONTEXT;
   document.getElementById('cfg-audit-log').checked = !!p.audit_log_enabled;
@@ -1931,6 +1940,7 @@ async function saveConfig() {
     show_reviewer_breakdown: document.getElementById('cfg-reviewer-breakdown').checked ? 1 : 0,
     raw_api_mode: rawMode,
     raw_api_template: rawTemplate,
+    reasoning_effort: document.getElementById('cfg-reasoning')?.value || '',
   };
   await fetch(`${API}/projects/${currentProjId}/config`, {
     method:'PATCH', headers:{'Content-Type':'application/json'},
@@ -4586,6 +4596,52 @@ async function initPdfLocation() {
     PDF_LOCATION = d.pdf_location || 'local';
   } catch(e) { PDF_LOCATION = 'local'; }
   applyPdfLocationUI();
+}
+
+// The reasoning control only appears for OpenRouter, and only offers the levels the
+// chosen model reports. Sending an effort a model does not support is ignored at best
+// and rejected at worst, and the other providers spell the setting differently — so
+// the app asks OpenRouter first and otherwise sends nothing.
+async function refreshReasoningOptions() {
+  const group = document.getElementById('cfg-reasoning-group');
+  const sel = document.getElementById('cfg-reasoning');
+  const note = document.getElementById('cfg-reasoning-note');
+  if (!group || !sel) return;
+  const provider = document.getElementById('cfg-provider')?.value;
+  const model = (document.getElementById('cfg-model')?.value || '').trim();
+  if (provider !== 'openrouter' || !model) { group.style.display = 'none'; return; }
+
+  group.style.display = '';
+  note.textContent = 'Checking what this model supports…';
+  let info = {known: false};
+  try {
+    info = await (await fetch(`${API}/openrouter/model?model=${encodeURIComponent(model)}`)).json();
+  } catch(e) { /* offline or blocked — fall through to the unknown case */ }
+
+  const current = currentProj?.reasoning_effort || '';
+  if (!info.known || !info.supports_reasoning) {
+    sel.innerHTML = '<option value="">Model default</option>';
+    sel.value = '';
+    note.textContent = info.known
+      ? 'This model reports no reasoning settings, so nothing is sent.'
+      : 'Could not look this model up on OpenRouter — leaving reasoning to the model.';
+    return;
+  }
+
+  const efforts = info.supported_efforts.length ? info.supported_efforts : ['low','medium','high'];
+  const opts = ['<option value="">Model default' +
+                (info.default_effort ? ` (${esc(info.default_effort)})` : '') + '</option>'];
+  if (!info.mandatory) opts.push('<option value="none">None — no reasoning</option>');
+  efforts.forEach(e => opts.push(`<option value="${esc(e)}">${esc(e)}</option>`));
+  sel.innerHTML = opts.join('');
+  sel.value = [...sel.options].some(o => o.value === current) ? current : '';
+
+  const bits = [];
+  if (info.default_effort === 'max') {
+    bits.push('This model defaults to <strong>max</strong> — reasoning can use the whole output budget and leave nothing to answer with.');
+  }
+  if (info.mandatory) bits.push('Reasoning cannot be switched off on this model.');
+  note.innerHTML = bits.join(' ') || 'Leave on model default unless a run shows reasoning eating the budget.';
 }
 
 function applyPdfLocationUI() {
