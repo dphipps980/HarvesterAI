@@ -2245,7 +2245,18 @@ async function submitAIRun() {
     }
   }
 
-  const storeOnServer = PDF_LOCATION === 'server' && document.getElementById('ar-store-server')?.checked;
+  // Same guard as the PDF button: a lookup that failed at page load would leave this
+  // false and silently skip uploading the PDFs, leaving papers no one can open later.
+  if (!pdfLocationKnown) {
+    await fetchPdfLocation();
+    applyPdfLocationUI();
+  }
+  const wantsServerCopy = document.getElementById('ar-store-server')?.checked;
+  if (!pdfLocationKnown && wantsServerCopy) {
+    alert('Could not reach the server to check where PDFs are stored, so the PDFs would not be uploaded. Reload and try again.');
+    btn.disabled = false; btn.textContent = 'Start Run'; return;
+  }
+  const storeOnServer = PDF_LOCATION === 'server' && wantsServerCopy;
   if (storeOnServer) {
     const uploadWrap = document.getElementById('ar-upload-wrap');
     const uploadBar = document.getElementById('upload-bar');
@@ -4589,12 +4600,29 @@ function applyProjectRole(role) {
 let SIGNUP_MODE = 'closed';
 let PDF_LOCATION = 'local';
 
-async function initPdfLocation() {
+// Whether the answer below actually came from the server. A failed lookup used to
+// fall through to 'local', so a page that loaded during a restart spent the rest of
+// the session in the wrong mode — clicking PDF then asked for a local folder on a
+// server-storage deployment.
+let pdfLocationKnown = false;
+
+async function fetchPdfLocation() {
   try {
     const r = await fetch(`${API}/config/pdf-location`);
+    if (!r.ok) return false;
     const d = await r.json();
-    PDF_LOCATION = d.pdf_location || 'local';
-  } catch(e) { PDF_LOCATION = 'local'; }
+    if (!d || !d.pdf_location) return false;
+    PDF_LOCATION = d.pdf_location;
+    pdfLocationKnown = true;
+    return true;
+  } catch(e) { return false; }
+}
+
+async function initPdfLocation() {
+  if (!await fetchPdfLocation()) {
+    await new Promise(r => setTimeout(r, 1500));   // a restart takes a moment
+    await fetchPdfLocation();
+  }
   applyPdfLocationUI();
 }
 
@@ -5089,6 +5117,16 @@ async function copyPdfPath() {
   const relPath = hfCurrentBib?.pdf_rel_path || '';
   if (!relPath) {
     alert('No PDF path found in RIS data for this paper.');
+    return;
+  }
+  // Ask again rather than act on a guess — otherwise a lookup that failed at page
+  // load sends this down the local-folder path on a server-storage deployment.
+  if (!pdfLocationKnown) {
+    await fetchPdfLocation();
+    applyPdfLocationUI();
+  }
+  if (!pdfLocationKnown) {
+    alert('Could not reach the server to check where PDFs are stored. Try again in a moment.');
     return;
   }
   if (PDF_LOCATION === 'server') {
